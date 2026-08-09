@@ -3,8 +3,12 @@ import RealityKit
 
 /// Drives a centimeter-accurate AR session by relocalizing against a previously
 /// captured `ARWorldMap`. When the device recognizes the saved space, ARKit
-/// re-adds the Mecca's world anchor at its true physical position and this
-/// controller renders the Mecca exactly there — no GPS involved.
+/// resolves the Mecca's saved world anchor to its true physical position.
+///
+/// Crucially, as soon as that happens once, we "bake" the Mecca into a fixed
+/// world-space anchor at the resolved transform and stop depending on the live
+/// ARAnchor. From then on the Mecca stays pinned in place and is visible from
+/// any angle — the player does not have to hold the exact original viewpoint.
 ///
 /// Shared by Hunt and MyMeccas; each feature wraps it in its own AR container.
 @MainActor
@@ -26,10 +30,16 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
     var onStateChange: ((State) -> Void)?
 
     private weak var arView: ARView?
-    private var meccaAnchorEntity: AnchorEntity?
     private var meccaEntity: Entity?
-    private var relocalized = false
     private var appearance: MeccaAppearance = .default
+
+    /// True once tracking has reached full quality (i.e. relocalized against the
+    /// saved map). Saved anchor transforms are only trustworthy after this.
+    private var relocalized = false
+    /// The most recent world transform reported for the saved Mecca anchor.
+    private var resolvedTransform: simd_float4x4?
+    /// True once the Mecca has been pinned into world space.
+    private var placed = false
 
     func start(worldMap: ARWorldMap, appearance: MeccaAppearance, in arView: ARView) {
         self.arView = arView
@@ -58,41 +68,62 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
         for anchor in anchors where anchor.name == Self.anchorName {
-            attachMecca(to: anchor)
+            resolvedTransform = anchor.transform
         }
+        placeIfReady()
+    }
+
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        for anchor in anchors where anchor.name == Self.anchorName {
+            resolvedTransform = anchor.transform
+        }
+        placeIfReady()
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
         switch camera.trackingState {
         case .normal:
             relocalized = true
-            onStateChange?(meccaEntity != nil ? .located : .relocalizing)
+            placeIfReady()
+            onStateChange?(placed ? .located : .relocalizing)
         case .limited(.relocalizing):
-            onStateChange?(.relocalizing)
+            if !placed { onStateChange?(.relocalizing) }
         case .limited:
-            onStateChange?(relocalized ? .located : .relocalizing)
+            // Once placed, a transient tracking dip doesn't hide the Mecca —
+            // odometry keeps it pinned — so keep reporting located.
+            onStateChange?(placed ? .located : .relocalizing)
         case .notAvailable:
-            onStateChange?(.initializing)
+            if !placed { onStateChange?(.initializing) }
         @unknown default:
-            onStateChange?(.relocalizing)
+            if !placed { onStateChange?(.relocalizing) }
         }
     }
 
-    private func attachMecca(to anchor: ARAnchor) {
-        guard let arView, meccaAnchorEntity == nil else { return }
+    /// Bakes the Mecca into a fixed world anchor the first time we have both a
+    /// good relocalization and a resolved anchor transform.
+    private func placeIfReady() {
+        guard
+            !placed,
+            relocalized,
+            let arView,
+            let transform = resolvedTransform
+        else { return }
 
-        let anchorEntity = AnchorEntity(anchor: anchor)
+        placed = true
+
+        // Anchor to a fixed world transform (not the live ARAnchor) so the Mecca
+        // remains visible and stationary from every angle, even if the session's
+        // relocalization confidence later fluctuates.
+        let anchorEntity = AnchorEntity(world: transform)
         arView.scene.addAnchor(anchorEntity)
-        meccaAnchorEntity = anchorEntity
 
         Task { @MainActor [weak self] in
+            guard let self else { return }
             let entity = await MeccaEntityFactory.make()
-            MeccaEntityFactory.apply(self?.appearance ?? .default, to: entity)
+            MeccaEntityFactory.apply(self.appearance, to: entity)
             anchorEntity.addChild(entity)
-            self?.meccaEntity = entity
-            if self?.relocalized == true {
-                self?.onStateChange?(.located)
-            }
+            self.meccaEntity = entity
+            self.onStateChange?(.located)
         }
     }
 }

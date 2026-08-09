@@ -178,7 +178,7 @@ struct PlacementView: View {
                     }
                 }
                 .padding()
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .background(Color.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 20))
             }
             .padding()
 
@@ -824,6 +824,11 @@ private struct PlacementARView: UIViewRepresentable {
                 return
             }
 
+            // Only one Mecca can be hidden at a time, so replace any previously
+            // placed preview before adding the new one.
+            placedMeccas.forEach { $0.anchor.removeFromParent() }
+            placedMeccas.removeAll()
+
             // Keep the character upright in gravity-aligned world space even
             // when the surface is a wall. The surface normal is still used to
             // lift the anchor slightly off the surface to avoid clipping.
@@ -864,7 +869,7 @@ private struct PlacementARView: UIViewRepresentable {
                 self.apply(placementConfiguration, to: placedMecca)
                 self.lastAppliedConfiguration = placementConfiguration
 
-                self.parent.placementCount += 1
+                self.parent.placementCount = 1
                 self.parent.message = "Mecca placed — adjust it below or save it"
             }
         }
