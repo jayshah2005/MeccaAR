@@ -18,24 +18,41 @@ struct LoginView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
+            Color.black.ignoresSafeArea()
+
+            // Show the full artwork, anchored to the top so most of it stays
+            // visible above the sign-in controls.
+            Image("LoginBackground")
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .ignoresSafeArea()
+
+            // Fade the artwork into black behind the controls so the text and
+            // fields stay legible.
             LinearGradient(
-                colors: [Color.black, Color(red: 0.04, green: 0.18, blue: 0.14)],
+                colors: [
+                    Color.black.opacity(0),
+                    Color.black.opacity(0.75),
+                    Color.black
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
+            .frame(height: 340)
+            .frame(maxWidth: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 24) {
-                Spacer()
-
+            VStack(alignment: .leading, spacing: 16) {
                 Text("MECCA HUNT")
                     .font(.caption.weight(.bold))
                     .tracking(4)
                     .foregroundStyle(.mint)
 
                 Text("Pick a name\nto start hunting.")
-                    .font(.system(size: 44, weight: .black, design: .rounded))
+                    .font(.system(size: 40, weight: .black, design: .rounded))
                     .minimumScaleFactor(0.75)
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -69,10 +86,9 @@ struct LoginView: View {
                     .tint(.mint)
                     .disabled(!canSubmit)
                 }
-
-                Spacer()
             }
             .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .preferredColorScheme(.dark)
     }

@@ -16,19 +16,29 @@ struct MeccaLocatorARView: View {
 
     @State private var mapLoad: MapLoad = .idle
     @State private var preciseState: PreciseMeccaARController.State = .relocalizing
+    @State private var geoState: GeoMeccaARController.State = .localizing
+    @State private var facePhoto: UIImage?
 
     private static let arrivedRadiusMeters = 2.0
+
+    fileprivate static var guideFreezeMeters: Double { arrivedRadiusMeters }
 
     /// Whether the precise, world-map-based locate is available and loading.
     private enum MapLoad {
         case idle
         case loading
         case ready(ARWorldMap)
+        case geo
         case gpsFallback
     }
 
     private var isPreciseMode: Bool {
         if case .ready = mapLoad { return true }
+        return false
+    }
+
+    private var isGeoMode: Bool {
+        if case .geo = mapLoad { return true }
         return false
     }
 
@@ -76,28 +86,64 @@ struct MeccaLocatorARView: View {
             LocatorPreciseARContainer(
                 worldMap: map,
                 appearance: target.appearance,
+                facePhoto: facePhoto,
+                placement: placement,
+                deviceHeadingDegrees: location.heading?.trueHeading
+                    ?? location.heading?.magneticHeading,
                 state: $preciseState
             )
+        case .geo:
+            LocatorGeoARContainer(
+                coordinate: targetCoordinate,
+                altitude: target.altitude,
+                appearance: target.appearance,
+                facePhoto: facePhoto,
+                placement: placement,
+                deviceHeadingDegrees: location.heading?.trueHeading
+                    ?? location.heading?.magneticHeading,
+                state: $geoState
+            )
         case .idle, .loading, .gpsFallback:
-            LocatorARContainer(placement: placement, appearance: target.appearance)
+            LocatorARContainer(
+                placement: placement,
+                appearance: target.appearance,
+                facePhoto: facePhoto
+            )
         }
     }
 
     private func loadWorldMap() async {
+        async let faceTask: Void = loadFacePhoto()
+        if target.placementMode == .geo {
+            mapLoad = .geo
+            await faceTask
+            return
+        }
         guard target.hasWorldMap, case .idle = mapLoad else {
             if !target.hasWorldMap { mapLoad = .gpsFallback }
+            await faceTask
             return
         }
         mapLoad = .loading
         do {
             guard let data = try await appState.dependencies.meccas.worldMap(for: target.id) else {
                 mapLoad = .gpsFallback
+                await faceTask
                 return
             }
             mapLoad = .ready(try ARWorldMapArchiver.decode(data))
         } catch {
             mapLoad = .gpsFallback
         }
+        await faceTask
+    }
+
+    private func loadFacePhoto() async {
+        guard target.hasFacePhoto else { return }
+        guard let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
+              let image = UIImage(data: data)
+        else { return }
+        facePhoto = image
     }
 
     private var topBar: some View {
@@ -145,6 +191,11 @@ struct MeccaLocatorARView: View {
         if case .loading = mapLoad {
             return "Loading precise AR map…"
         }
+        if isGeoMode {
+            return geoState == .located
+                ? "Found it — outdoor geo lock"
+                : "Look around outdoors to lock geo tracking"
+        }
         if isPreciseMode {
             return preciseState == .located
                 ? "Found it — it's pinned exactly here"
@@ -158,6 +209,11 @@ struct MeccaLocatorARView: View {
     }
 
     private var subHintText: String {
+        if isGeoMode {
+            return geoState == .located
+                ? "Your Mecca is pinned with outdoor geo tracking."
+                : "Stay outside with a clear street view until geo tracking locks on."
+        }
         if isPreciseMode {
             return preciseState == .located
                 ? "Your Mecca is shown at its exact real-world spot."
@@ -195,6 +251,7 @@ private struct LocatorCrosshair: View {
 private struct LocatorARContainer: UIViewRepresentable {
     let placement: LocatorPlacement?
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -213,6 +270,7 @@ private struct LocatorARContainer: UIViewRepresentable {
                 distanceMeters: placement.distanceMeters,
                 freezeWithinMeters: 2.5,
                 appearance: appearance,
+                facePhoto: facePhoto,
                 in: arView
             )
         }
@@ -238,10 +296,14 @@ private struct LocatorARContainer: UIViewRepresentable {
 }
 
 /// Precise locate container: relocalizes against the Mecca's stored world map and
-/// renders it at its exact physical spot (no claiming).
+/// renders it at its exact physical spot. While scanning to lock on, a
+/// camera-relative GPS guide Mecca points toward the right area.
 private struct LocatorPreciseARContainer: UIViewRepresentable {
     let worldMap: ARWorldMap
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
+    let placement: LocatorPlacement?
+    let deviceHeadingDegrees: Double?
     @Binding var state: PreciseMeccaARController.State
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -252,10 +314,14 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
         context.coordinator.arView = arView
         context.coordinator.controller.onStateChange = { newState in
             context.coordinator.parent.state = newState
+            if newState == .located {
+                context.coordinator.guide.clear()
+            }
         }
         context.coordinator.controller.start(
             worldMap: worldMap,
             appearance: appearance,
+            facePhoto: facePhoto,
             in: arView
         )
         return arView
@@ -263,6 +329,22 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
+        guard
+            context.coordinator.parent.state != .located,
+            let placement,
+            let heading = deviceHeadingDegrees,
+            heading >= 0
+        else { return }
+
+        context.coordinator.guide.updateCameraRelative(
+            targetBearingDegrees: placement.bearingDegrees,
+            deviceHeadingDegrees: heading,
+            distanceMeters: placement.distanceMeters,
+            freezeWithinMeters: MeccaLocatorARView.guideFreezeMeters,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
     }
 
     static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
@@ -274,8 +356,77 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
         var parent: LocatorPreciseARContainer
         weak var arView: ARView?
         let controller = PreciseMeccaARController()
+        let guide = ARMeccaPlacer()
 
         init(_ parent: LocatorPreciseARContainer) {
+            self.parent = parent
+        }
+    }
+}
+
+private struct LocatorGeoARContainer: UIViewRepresentable {
+    let coordinate: CLLocationCoordinate2D
+    let altitude: Double?
+    let appearance: MeccaAppearance
+    let facePhoto: UIImage?
+    let placement: LocatorPlacement?
+    let deviceHeadingDegrees: Double?
+    @Binding var state: GeoMeccaARController.State
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero)
+        arView.automaticallyConfigureSession = false
+        context.coordinator.arView = arView
+        context.coordinator.controller.onStateChange = { newState in
+            context.coordinator.parent.state = newState
+            if newState == .located {
+                context.coordinator.guide.clear()
+            }
+        }
+        context.coordinator.controller.start(
+            coordinate: coordinate,
+            altitude: altitude,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
+        return arView
+    }
+
+    func updateUIView(_ arView: ARView, context: Context) {
+        context.coordinator.parent = self
+        guard
+            context.coordinator.parent.state != .located,
+            let placement,
+            let heading = deviceHeadingDegrees,
+            heading >= 0
+        else { return }
+
+        context.coordinator.guide.updateCameraRelative(
+            targetBearingDegrees: placement.bearingDegrees,
+            deviceHeadingDegrees: heading,
+            distanceMeters: placement.distanceMeters,
+            freezeWithinMeters: MeccaLocatorARView.guideFreezeMeters,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
+    }
+
+    static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
+        arView.session.pause()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: LocatorGeoARContainer
+        weak var arView: ARView?
+        let controller = GeoMeccaARController()
+        let guide = ARMeccaPlacer()
+
+        init(_ parent: LocatorGeoARContainer) {
             self.parent = parent
         }
     }

@@ -1,5 +1,6 @@
 import ARKit
 import RealityKit
+import UIKit
 
 /// Drives a centimeter-accurate AR session by relocalizing against a previously
 /// captured `ARWorldMap`. When the device recognizes the saved space, ARKit
@@ -48,6 +49,7 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
     private var isCreatingEntity = false
     private var fallbackIsVisible = false
     private var generation = 0
+    private var facePhoto: UIImage?
 
     /// True once tracking has reached full quality (i.e. relocalized against the
     /// saved map). Saved anchor transforms are only trustworthy after this.
@@ -61,11 +63,13 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
         worldMap: ARWorldMap,
         appearance: MeccaAppearance,
         fallbackPlacement: FallbackPlacement? = nil,
+        facePhoto: UIImage? = nil,
         in arView: ARView
     ) {
         self.arView = arView
         self.appearance = appearance
         self.fallbackPlacement = fallbackPlacement
+        self.facePhoto = facePhoto
         fallbackEnabled = fallbackPlacement != nil
         arView.session.delegate = self
         ensureEntity()
@@ -176,6 +180,11 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
                 self.appearance,
                 to: entity,
                 displayScale: 2
+            )
+            _ = MeccaEntityFactory.applyFacePhoto(
+                self.facePhoto,
+                placement: .initial,
+                to: entity
             )
             self.meccaEntity = entity
             self.isCreatingEntity = false

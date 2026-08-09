@@ -41,6 +41,13 @@ final class AppState {
         route = .login
     }
 
+    /// Permanently delete the signed-in account, then return to sign in.
+    func deleteAccount() async throws {
+        guard let userID = currentUser?.id else { return }
+        try await dependencies.auth.deleteAccount(userID: userID)
+        signOut()
+    }
+
     // MARK: Session persistence
 
     private func persist(_ user: User) {

@@ -245,7 +245,7 @@ struct HuntARView: View {
                     .foregroundStyle(.mint)
                 Text("Mecca hunted!")
                     .font(.largeTitle.bold())
-                Text("+\(HuntTuning.awardedPoints) points for finding \(target.name).")
+                Text("+\(target.currentPoints) points for finding \(target.name).")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -270,8 +270,7 @@ struct HuntARView: View {
             do {
                 _ = try await appState.dependencies.meccas.claim(
                     meccaID: target.id,
-                    hunterID: hunterID,
-                    awardedPoints: HuntTuning.awardedPoints
+                    hunterID: hunterID
                 )
                 claimState = .claimed
             } catch {

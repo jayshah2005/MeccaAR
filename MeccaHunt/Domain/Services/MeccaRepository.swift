@@ -14,6 +14,7 @@ protocol MeccaRepository: Sendable {
         name: String,
         coordinate: GeoCoordinate,
         appearance: MeccaAppearance,
+        placementMode: MeccaPlacementMode,
         notBefore: Date
     ) async throws -> Mecca
 
@@ -32,16 +33,19 @@ protocol MeccaRepository: Sendable {
     /// The most recent time this owner hid a Mecca, or nil if they never have.
     func lastPlacement(ownerID: UUID) async throws -> Date?
 
-    /// Record a hunt and remove the Mecca from the map. Fails if the hunter owns
-    /// the Mecca or it has already been found.
+    /// Record a hunt and remove the Mecca from the map. The awarded points are
+    /// the Mecca's current age-based value (server-authoritative). Fails if the
+    /// hunter owns the Mecca, it has already been found, or it has expired.
     func claim(
         meccaID: UUID,
-        hunterID: UUID,
-        awardedPoints: Int
+        hunterID: UUID
     ) async throws -> HuntClaim
 
-    /// All players ranked by total points earned from hunts.
-    func leaderboard() async throws -> [LeaderboardEntry]
+    /// Hunters ranked by points earned from claims within the given time window.
+    func hunterLeaderboard(period: LeaderboardPeriod) async throws -> [LeaderboardEntry]
+
+    /// Every player ranked by total points earned from hunts, all time.
+    func overallLeaderboard() async throws -> [LeaderboardEntry]
 
     /// The active Meccas hidden by this owner (still out there to be found).
     func meccasOwned(by ownerID: UUID) async throws -> [Mecca]
@@ -55,6 +59,13 @@ protocol MeccaRepository: Sendable {
 
     /// Fetch the stored compressed world map for a Mecca, or nil if none exists.
     func worldMap(for meccaID: UUID) async throws -> Data?
+
+    /// Store a JPEG face photo for this Mecca so hunters see the same face.
+    /// Overwrites any existing photo.
+    func uploadFacePhoto(meccaID: UUID, jpegData: Data) async throws
+
+    /// Fetch the stored face photo JPEG for a Mecca, or nil if none exists.
+    func facePhoto(for meccaID: UUID) async throws -> Data?
 }
 
 enum MeccaRepositoryError: LocalizedError {

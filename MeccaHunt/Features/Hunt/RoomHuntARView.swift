@@ -24,6 +24,7 @@ struct RoomHuntARView: View {
     @State private var didAttemptWorldMapLoad = false
     @State private var primaryWorldMapUnavailable = false
     @State private var preciseState: PreciseMeccaARController.State = .initializing
+    @State private var facePhotos: [UUID: UIImage] = [:]
 
     init(
         targets: [Mecca],
@@ -67,7 +68,8 @@ struct RoomHuntARView: View {
                 // visible and tappable without changing its general direction.
                 lateralOffsetMeters: (Double(index) - midpoint) * 0.45,
                 headingDegrees: currentHeading,
-                appearance: mecca.appearance
+                appearance: mecca.appearance,
+                facePhoto: facePhotos[mecca.id]
             )
         }
     }
@@ -115,6 +117,7 @@ struct RoomHuntARView: View {
         .preferredColorScheme(.dark)
         .task { await MeccaEntityFactory.preload() }
         .task { await loadPrimaryWorldMapIfNeeded() }
+        .task { await loadFacePhotos() }
         .onChange(of: tappedMeccaID) { _, meccaID in
             if let meccaID { claim(meccaID) }
         }
@@ -229,6 +232,16 @@ struct RoomHuntARView: View {
         }
     }
 
+    private func loadFacePhotos() async {
+        for target in targets where target.hasFacePhoto && facePhotos[target.id] == nil {
+            guard
+                let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
+                let image = UIImage(data: data)
+            else { continue }
+            facePhotos[target.id] = image
+        }
+    }
+
     private func successOverlay(for mecca: Mecca) -> some View {
         ZStack {
             Color.black.opacity(0.75).ignoresSafeArea()
@@ -238,7 +251,7 @@ struct RoomHuntARView: View {
                     .foregroundStyle(.mint)
                 Text("Mecca hunted!")
                     .font(.largeTitle.bold())
-                Text("+\(HuntTuning.awardedPoints) points for finding \(mecca.name).")
+                Text("+\(mecca.currentPoints) points for finding \(mecca.name).")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -285,8 +298,7 @@ struct RoomHuntARView: View {
             do {
                 _ = try await appState.dependencies.meccas.claim(
                     meccaID: target.id,
-                    hunterID: hunterID,
-                    awardedPoints: HuntTuning.awardedPoints
+                    hunterID: hunterID
                 )
                 removedMeccaIDs.insert(target.id)
                 tappedMeccaID = nil
@@ -302,13 +314,14 @@ struct RoomHuntARView: View {
     }
 }
 
-private struct RoomHuntPlacement: Equatable, Identifiable {
+private struct RoomHuntPlacement: Identifiable {
     let id: UUID
     let bearingDegrees: Double
     let distanceMeters: Double
     let lateralOffsetMeters: Double
     let headingDegrees: Double?
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
 }
 
 private struct RoomHuntCrosshair: View {
@@ -432,6 +445,7 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                         ? placement.headingDegrees
                         : nil,
                     appearance: placement.appearance,
+                    facePhoto: placement.facePhoto,
                     in: arView
                 )
             }
@@ -458,6 +472,7 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                 worldMap: worldMap,
                 appearance: primary.appearance,
                 fallbackPlacement: nil,
+                facePhoto: primary.facePhoto,
                 in: arView
             )
         }

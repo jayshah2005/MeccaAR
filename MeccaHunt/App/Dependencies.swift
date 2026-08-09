@@ -55,6 +55,8 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
 
     func signIn(username: String) async throws -> User { throw failure }
 
+    func deleteAccount(userID: UUID) async throws { throw failure }
+
     func allMeccas(hunterID: UUID) async throws -> [Mecca] { throw failure }
 
     func createMecca(
@@ -62,6 +64,7 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
         name: String,
         coordinate: GeoCoordinate,
         appearance: MeccaAppearance,
+        placementMode: MeccaPlacementMode,
         notBefore: Date
     ) async throws -> Mecca { throw failure }
 
@@ -78,11 +81,12 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
 
     func claim(
         meccaID: UUID,
-        hunterID: UUID,
-        awardedPoints: Int
+        hunterID: UUID
     ) async throws -> HuntClaim { throw failure }
 
-    func leaderboard() async throws -> [LeaderboardEntry] { throw failure }
+    func hunterLeaderboard(period: LeaderboardPeriod) async throws -> [LeaderboardEntry] { throw failure }
+
+    func overallLeaderboard() async throws -> [LeaderboardEntry] { throw failure }
 
     func meccasOwned(by ownerID: UUID) async throws -> [Mecca] { throw failure }
 
@@ -91,4 +95,8 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
     func uploadWorldMap(meccaID: UUID, compressedData: Data) async throws { throw failure }
 
     func worldMap(for meccaID: UUID) async throws -> Data? { throw failure }
+
+    func uploadFacePhoto(meccaID: UUID, jpegData: Data) async throws { throw failure }
+
+    func facePhoto(for meccaID: UUID) async throws -> Data? { throw failure }
 }

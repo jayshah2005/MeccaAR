@@ -219,13 +219,22 @@ enum MeccaEntityFactory {
 
         if let modelEntity = entity as? ModelEntity,
            var model = modelEntity.model {
-            model.materials = [
-                SimpleMaterial(
-                    color: color,
-                    roughness: 0.82,
-                    isMetallic: false
+            let tinted = SimpleMaterial(
+                color: color,
+                roughness: 0.82,
+                isMetallic: false
+            )
+            // Recolor every material slot the mesh uses. Replacing the whole
+            // array with a single material would leave multi-material meshes
+            // only partially tinted (the source of the color picker glitch).
+            if model.materials.isEmpty {
+                model.materials = [tinted]
+            } else {
+                model.materials = Array(
+                    repeating: tinted,
+                    count: model.materials.count
                 )
-            ]
+            }
             modelEntity.model = model
         }
 
@@ -277,6 +286,13 @@ enum MeccaEntityFactory {
         faceOverlay.orientation = projection.overlayOrientation
         entity.addChild(faceOverlay)
         return true
+    }
+
+    /// Compatibility for persisted face photos that do not yet store the
+    /// owner's custom body coordinates.
+    @discardableResult
+    static func applyFacePhoto(_ image: UIImage?, to entity: Entity) -> Bool {
+        applyFacePhoto(image, placement: .initial, to: entity)
     }
 
     /// Rotates a clone into the exact front projection used by the drag editor.

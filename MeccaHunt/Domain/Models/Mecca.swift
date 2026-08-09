@@ -46,10 +46,23 @@ struct Mecca: Identifiable, Codable, Hashable, Sendable {
     /// Whether a centimeter-accurate ARKit world map is stored for this Mecca,
     /// enabling precise visual relocalization instead of GPS-only guidance.
     let hasWorldMap: Bool
+    /// Whether an owner face photo is stored for this Mecca.
+    let hasFacePhoto: Bool
+    /// How this Mecca was anchored: outdoor geo tracking or an AR world map.
+    let placementMode: MeccaPlacementMode
 
     var latitude: Double { coordinate.latitude }
     var longitude: Double { coordinate.longitude }
     var altitude: Double? { coordinate.altitude }
+
+    /// Whole days this Mecca has been hidden.
+    var daysHidden: Int { MeccaScoring.daysHidden(since: createdAt) }
+    /// Current point value, which grows the longer it stays hidden.
+    var currentPoints: Int { MeccaScoring.points(since: createdAt) }
+    /// Rarity tier for display.
+    var rarity: MeccaScoring.Tier { MeccaScoring.tier(since: createdAt) }
+    /// Whether it has passed the expiry age and should no longer appear.
+    var isExpired: Bool { MeccaScoring.isExpired(createdAt: createdAt) }
 }
 
 /// A single successful hunt, recording who found which Mecca.

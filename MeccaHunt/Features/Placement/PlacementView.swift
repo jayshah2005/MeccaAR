@@ -640,7 +640,7 @@ struct PlacementView: View {
             )
             do {
                 saveStatus = "Saving…"
-                _ = try await appState.dependencies.meccas.createMappedMecca(
+                let mecca = try await appState.dependencies.meccas.createMappedMecca(
                     ownerID: owner.id,
                     name: name,
                     coordinate: coordinate,
@@ -648,6 +648,12 @@ struct PlacementView: View {
                     notBefore: notBefore,
                     worldMapData: worldMapData
                 )
+                if let jpeg = facePhoto?.jpegData(compressionQuality: 0.72) {
+                    try? await appState.dependencies.meccas.uploadFacePhoto(
+                        meccaID: mecca.id,
+                        jpegData: jpeg
+                    )
+                }
                 didSaveWithMap = true
                 savedCapturePercentage = chosenCapturePercentage
                 didSave = true

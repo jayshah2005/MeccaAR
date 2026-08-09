@@ -20,14 +20,17 @@ struct NeonMeccaRepository: MeccaRepository {
                 m.tint_red as tint_red,
                 m.tint_green as tint_green,
                 m.tint_blue as tint_blue,
+                coalesce(m.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from m.created_at) as created_at_epoch,
                 count(c.id)::int as claim_count,
                 coalesce(bool_or(c.hunter_id = $1::uuid), false)::int as claimed_by_me,
-                (exists (select 1 from mecca_world_maps w where w.mecca_id = m.id))::int as has_world_map
+                (exists (select 1 from mecca_world_maps w where w.mecca_id = m.id))::int as has_world_map,
+                (exists (select 1 from mecca_face_photos f where f.mecca_id = m.id))::int as has_face_photo
             from meccas m
             join users u on u.id = m.owner_id
             left join hunt_claims c on c.mecca_id = m.id
             where m.state = 'active'
+              and m.created_at >= now() - interval '30 days'
             group by m.id, u.username
             order by m.created_at desc;
             """,
@@ -42,6 +45,7 @@ struct NeonMeccaRepository: MeccaRepository {
         name: String,
         coordinate: GeoCoordinate,
         appearance: MeccaAppearance,
+        placementMode: MeccaPlacementMode,
         notBefore: Date
     ) async throws -> Mecca {
         // The insert only fires when no Mecca by this owner exists since
@@ -51,18 +55,21 @@ struct NeonMeccaRepository: MeccaRepository {
             with inserted as (
                 insert into meccas (
                     owner_id, name, latitude, longitude, altitude,
-                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
+                    placement_mode
                 )
                 select
                     $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision,
                     $7::double precision, $8::double precision, $9::double precision,
-                    $10::double precision, $11::double precision, $12::double precision
+                    $10::double precision, $11::double precision, $12::double precision,
+                    $13
                 where not exists (
                     select 1 from meccas
                     where owner_id = $1::uuid and created_at >= $6::timestamptz
                 )
                 returning id, owner_id, name, latitude, longitude, altitude,
-                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue, created_at
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
+                    placement_mode, created_at
             )
             select
                 i.id as id,
@@ -78,10 +85,12 @@ struct NeonMeccaRepository: MeccaRepository {
                 i.tint_red as tint_red,
                 i.tint_green as tint_green,
                 i.tint_blue as tint_blue,
+                coalesce(i.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from i.created_at) as created_at_epoch,
                 0 as claim_count,
                 0 as claimed_by_me,
-                0 as has_world_map
+                0 as has_world_map,
+                0 as has_face_photo
             from inserted i
             join users u on u.id = i.owner_id;
             """,
@@ -97,7 +106,8 @@ struct NeonMeccaRepository: MeccaRepository {
                 .double(appearance.yRotationDegrees),
                 .double(appearance.red),
                 .double(appearance.green),
-                .double(appearance.blue)
+                .double(appearance.blue),
+                .text(placementMode.rawValue)
             ]
         )
 
@@ -120,18 +130,21 @@ struct NeonMeccaRepository: MeccaRepository {
             with inserted as (
                 insert into meccas (
                     owner_id, name, latitude, longitude, altitude,
-                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
+                    placement_mode
                 )
                 select
                     $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision,
                     $7::double precision, $8::double precision, $9::double precision,
-                    $10::double precision, $11::double precision, $12::double precision
+                    $10::double precision, $11::double precision, $12::double precision,
+                    'world_map'
                 where not exists (
                     select 1 from meccas
                     where owner_id = $1::uuid and created_at >= $6::timestamptz
                 )
                 returning id, owner_id, name, latitude, longitude, altitude,
-                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue, created_at
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
+                    placement_mode, created_at
             ),
             mapped as (
                 insert into mecca_world_maps (mecca_id, data)
@@ -152,10 +165,12 @@ struct NeonMeccaRepository: MeccaRepository {
                 i.tint_red as tint_red,
                 i.tint_green as tint_green,
                 i.tint_blue as tint_blue,
+                coalesce(i.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from i.created_at) as created_at_epoch,
                 0 as claim_count,
                 0 as claimed_by_me,
-                1 as has_world_map
+                1 as has_world_map,
+                0 as has_face_photo
             from inserted i
             join mapped w on w.mecca_id = i.id
             join users u on u.id = i.owner_id;
@@ -197,23 +212,35 @@ struct NeonMeccaRepository: MeccaRepository {
 
     func claim(
         meccaID: UUID,
-        hunterID: UUID,
-        awardedPoints: Int
+        hunterID: UUID
     ) async throws -> HuntClaim {
-        // `target` only matches an active Mecca owned by someone else, so an
-        // empty result means it's your own, already found, or missing. The
-        // Mecca is flagged `claimed` so it disappears from everyone's map, while
-        // the claim row is kept for the leaderboard.
+        // `target` only matches an active, non-expired Mecca owned by someone
+        // else, so an empty result means it's your own, already found, expired,
+        // or missing. The awarded points are the Mecca's current age-based value.
+        // The Mecca is flagged `claimed` so it disappears from everyone's map,
+        // while the claim row is kept for the leaderboard.
         let rows = try await client.execute(
             """
             with target as (
-                select id from meccas
+                select id, created_at from meccas
                 where id = $1::uuid and owner_id <> $2::uuid and state = 'active'
+                  and created_at >= now() - interval '30 days'
+            ),
+            scored as (
+                select id,
+                    case
+                        when now() - created_at >= interval '30 days' then 500
+                        when now() - created_at >= interval '20 days' then 300
+                        when now() - created_at >= interval '10 days' then 200
+                        else 100
+                    end as points
+                from target
             ),
             ins as (
                 insert into hunt_claims (mecca_id, hunter_id, awarded_points)
-                select id, $2::uuid, $3::int from target
-                on conflict (mecca_id, hunter_id) do update set claimed_at = now()
+                select id, $2::uuid, points from scored
+                on conflict (mecca_id, hunter_id) do update
+                    set claimed_at = now(), awarded_points = excluded.awarded_points
                 returning mecca_id, hunter_id,
                     extract(epoch from claimed_at) as claimed_at_epoch, awarded_points
             ),
@@ -224,7 +251,7 @@ struct NeonMeccaRepository: MeccaRepository {
             )
             select mecca_id, hunter_id, claimed_at_epoch, awarded_points from ins;
             """,
-            [.uuid(meccaID), .uuid(hunterID), .int(awardedPoints)]
+            [.uuid(meccaID), .uuid(hunterID)]
         )
 
         guard
@@ -240,11 +267,43 @@ struct NeonMeccaRepository: MeccaRepository {
             meccaID: meccaID,
             hunterID: hunterID,
             claimedAt: claimedAt,
-            awardedPoints: row.int("awarded_points") ?? awardedPoints
+            awardedPoints: row.int("awarded_points") ?? 0
         )
     }
 
-    func leaderboard() async throws -> [LeaderboardEntry] {
+    func hunterLeaderboard(period: LeaderboardPeriod) async throws -> [LeaderboardEntry] {
+        // `period.sqlInterval` is a fixed, enum-controlled literal (never user
+        // input), so interpolating it here is safe.
+        let rows = try await client.execute(
+            """
+            select
+                u.id as id,
+                u.username as username,
+                sum(c.awarded_points)::int as points,
+                count(c.id)::int as finds
+            from hunt_claims c
+            join users u on u.id = c.hunter_id
+            where c.claimed_at >= now() - interval '\(period.sqlInterval)'
+            group by u.id, u.username
+            order by points desc, u.username asc;
+            """
+        )
+
+        return rows.compactMap { row in
+            guard
+                let id = row.uuid("id"),
+                let username = row.string("username")
+            else { return nil }
+            return LeaderboardEntry(
+                id: id,
+                username: username,
+                points: row.int("points") ?? 0,
+                finds: row.int("finds") ?? 0
+            )
+        }
+    }
+
+    func overallLeaderboard() async throws -> [LeaderboardEntry] {
         let rows = try await client.execute(
             """
             select
@@ -290,13 +349,16 @@ struct NeonMeccaRepository: MeccaRepository {
                 m.tint_red as tint_red,
                 m.tint_green as tint_green,
                 m.tint_blue as tint_blue,
+                coalesce(m.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from m.created_at) as created_at_epoch,
                 0 as claim_count,
                 0 as claimed_by_me,
-                (exists (select 1 from mecca_world_maps w where w.mecca_id = m.id))::int as has_world_map
+                (exists (select 1 from mecca_world_maps w where w.mecca_id = m.id))::int as has_world_map,
+                (exists (select 1 from mecca_face_photos f where f.mecca_id = m.id))::int as has_face_photo
             from meccas m
             join users u on u.id = m.owner_id
             where m.owner_id = $1::uuid and m.state = 'active'
+              and m.created_at >= now() - interval '30 days'
             order by m.created_at desc;
             """,
             [.uuid(ownerID)]
@@ -345,6 +407,30 @@ struct NeonMeccaRepository: MeccaRepository {
         return Data(base64Encoded: base64)
     }
 
+    func uploadFacePhoto(meccaID: UUID, jpegData: Data) async throws {
+        let base64 = jpegData.base64EncodedString()
+        _ = try await client.execute(
+            """
+            insert into mecca_face_photos (mecca_id, data)
+            values ($1::uuid, $2)
+            on conflict (mecca_id) do update
+                set data = excluded.data, created_at = now();
+            """,
+            [.uuid(meccaID), .text(base64)]
+        )
+    }
+
+    func facePhoto(for meccaID: UUID) async throws -> Data? {
+        let rows = try await client.execute(
+            """
+            select data from mecca_face_photos where mecca_id = $1::uuid;
+            """,
+            [.uuid(meccaID)]
+        )
+        guard let base64 = rows.first?.string("data") else { return nil }
+        return Data(base64Encoded: base64)
+    }
+
     private static func mecca(from row: NeonRow) -> Mecca? {
         guard
             let id = row.uuid("id"),
@@ -379,7 +465,11 @@ struct NeonMeccaRepository: MeccaRepository {
             createdAt: createdAt,
             claimCount: row.int("claim_count") ?? 0,
             claimedByMe: row.bool("claimed_by_me"),
-            hasWorldMap: row.bool("has_world_map")
+            hasWorldMap: row.bool("has_world_map"),
+            hasFacePhoto: row.bool("has_face_photo"),
+            placementMode: MeccaPlacementMode(
+                rawValue: row.string("placement_mode") ?? ""
+            ) ?? .worldMap
         )
     }
 }

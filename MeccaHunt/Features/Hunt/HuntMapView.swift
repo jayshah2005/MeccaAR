@@ -22,6 +22,10 @@ struct HuntMapView: View {
     @State private var preloadedWorldMaps: [UUID: ARWorldMap] = [:]
     @State private var attemptedWorldMapLoads: Set<UUID> = []
     @State private var showLeaderboard = false
+    @State private var showValuableNearby = false
+    @State private var myPoints = 0
+    @State private var showDeleteAccount = false
+    @State private var accountError: String?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -40,6 +44,14 @@ struct HuntMapView: View {
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showLeaderboard) {
             LeaderboardView()
+        }
+        .sheet(isPresented: $showValuableNearby) {
+            NearbyValuableMeccasView(
+                candidates: valuableNearby,
+                hasLocation: location.currentLocation != nil,
+                onHunt: { openHunt(for: $0) }
+            )
+            .presentationDetents([.medium, .large])
         }
         .task { await MeccaEntityFactory.preload() }
         .task {
@@ -69,6 +81,39 @@ struct HuntMapView: View {
                 await reload()
             }
         }
+        .confirmationDialog(
+            "Delete account?",
+            isPresented: $showDeleteAccount,
+            titleVisibility: .visible
+        ) {
+            Button("Delete account", role: .destructive) { deleteAccount() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes your account, the Meccas you've hidden, and your scores. This can't be undone.")
+        }
+        .alert(
+            "Couldn't delete account",
+            isPresented: Binding(
+                get: { accountError != nil },
+                set: { if !$0 { accountError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { accountError = nil }
+        } message: {
+            Text(accountError ?? "")
+        }
+    }
+
+    private func deleteAccount() {
+        Task {
+            do {
+                location.stop()
+                try await appState.deleteAccount()
+            } catch {
+                accountError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        }
     }
 
     // MARK: Map
@@ -78,7 +123,11 @@ struct HuntMapView: View {
             UserAnnotation()
 
             ForEach(model?.clusters ?? []) { cluster in
-                Annotation(clusterTitle(cluster), coordinate: cluster.coordinate) {
+                Annotation(
+                    clusterTitle(cluster),
+                    coordinate: cluster.coordinate,
+                    anchor: .bottom
+                ) {
                     ClusterMarker(cluster: cluster, currentUserID: appState.currentUser?.id)
                         .onTapGesture { selectedCluster = cluster }
                 }
@@ -101,15 +150,27 @@ struct HuntMapView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(appState.currentUser?.username ?? "hunter")
                     .font(.headline)
-                Text("\(model?.meccas.count ?? 0) Meccas hidden")
+                Text("\(myPoints) point\(myPoints == 1 ? "" : "s")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.mint)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(.ultraThinMaterial, in: Capsule())
 
             Spacer()
+
+            Button {
+                showValuableNearby = true
+            } label: {
+                Label("Valuable nearby", systemImage: "sparkles")
+                    .labelStyle(.iconOnly)
+                    .font(.headline)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.black.opacity(0.6))
+            .accessibilityLabel("Valuable Meccas nearby")
 
             Button {
                 showLeaderboard = true
@@ -123,17 +184,27 @@ struct HuntMapView: View {
             .tint(.black.opacity(0.6))
             .accessibilityLabel("Leaderboard")
 
-            Button(role: .destructive) {
-                location.stop()
-                appState.signOut()
+            Menu {
+                Button {
+                    location.stop()
+                    appState.signOut()
+                } label: {
+                    Label("Log out", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                Button(role: .destructive) {
+                    showDeleteAccount = true
+                } label: {
+                    Label("Delete account", systemImage: "trash")
+                }
             } label: {
-                Label("Log out", systemImage: "rectangle.portrait.and.arrow.right")
-                    .font(.caption.weight(.bold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                Label("Account", systemImage: "person.crop.circle")
+                    .labelStyle(.iconOnly)
+                    .font(.headline)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.borderedProminent)
             .tint(.black.opacity(0.6))
+            .accessibilityLabel("Account options")
         }
         .padding(.horizontal)
     }
@@ -165,15 +236,7 @@ struct HuntMapView: View {
         VStack(spacing: 10) {
             ForEach(huntable) { candidate in
                 HuntableRow(candidate: candidate) {
-                    // Launch one room session so every nearby, same-floor
-                    // Mecca is instantiated at once instead of one at a time.
-                    let others = huntable
-                        .map(\.mecca)
-                        .filter { $0.id != candidate.mecca.id }
-                    huntRoom = HuntRoomSession(
-                        targets: [candidate.mecca] + others,
-                        primaryWorldMap: preloadedWorldMaps[candidate.mecca.id]
-                    )
+                    openHunt(for: candidate.mecca)
                 }
             }
 
@@ -229,9 +292,36 @@ struct HuntMapView: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
+    /// Meccas around the hunter (excluding their own), for the "valuable nearby"
+    /// discovery screen.
+    private var valuableNearby: [NearbyMecca] {
+        guard let model, let userID = appState.currentUser?.id else { return [] }
+        return model
+            .nearby(from: location.currentLocation, currentUserID: userID)
+            .filter { !$0.isMine && !$0.mecca.claimedByMe }
+    }
+
     private func reload() async {
         guard let model, let userID = appState.currentUser?.id else { return }
         await model.load(hunterID: userID)
+        await loadMyPoints(userID: userID)
+    }
+
+    private func openHunt(for primary: Mecca) {
+        let others = currentHuntableCandidates
+            .map(\.mecca)
+            .filter { $0.id != primary.id }
+        huntRoom = HuntRoomSession(
+            targets: [primary] + others,
+            primaryWorldMap: preloadedWorldMaps[primary.id]
+        )
+    }
+
+    private func loadMyPoints(userID: UUID) async {
+        guard let entries = try? await appState.dependencies.meccas.overallLeaderboard() else {
+            return
+        }
+        myPoints = entries.first(where: { $0.id == userID })?.points ?? 0
     }
 
     private var currentHuntableCandidates: [NearbyMecca] {
@@ -332,6 +422,10 @@ private struct OffFloorRow: View {
 
 // MARK: - Map marker
 
+/// An upside-down teardrop map pin whose color signals rarity and whose head
+/// shows the Mecca itself (a figure tinted with the Mecca's own color), so a
+/// hunter can see what they're looking for at a glance. Its tip points at the
+/// coordinate (the annotation is bottom-anchored).
 private struct ClusterMarker: View {
     let cluster: MeccaCluster
     let currentUserID: UUID?
@@ -340,23 +434,107 @@ private struct ClusterMarker: View {
         currentUserID != nil && cluster.meccas.allSatisfy { $0.ownerID == currentUserID }
     }
 
+    /// Rarest Mecca in the cluster drives the styling, so rarer (older) Meccas
+    /// stand out on the map.
+    private var topTier: MeccaScoring.Tier {
+        cluster.meccas.map(\.rarity).max(by: { $0.rawValue < $1.rawValue }) ?? .common
+    }
+
+    private var meccaColor: Color {
+        let appearance = cluster.representative.appearance
+        return Color(
+            red: appearance.red,
+            green: appearance.green,
+            blue: appearance.blue
+        )
+    }
+
+    /// Ink that stays readable on top of the Mecca's color.
+    private var meccaInk: Color {
+        let a = cluster.representative.appearance
+        let luminance = 0.299 * a.red + 0.587 * a.green + 0.114 * a.blue
+        return luminance > 0.6 ? .black : .white
+    }
+
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(allMine ? Color.blue : Color.mint)
-                .frame(width: cluster.isGroup ? 40 : 30, height: cluster.isGroup ? 40 : 30)
+        let tierColor = RarityStyle.color(topTier)
+        let isLegendary = topTier == .legendary
+        let isRarePlus = topTier.rawValue >= MeccaScoring.Tier.rare.rawValue
+        let width: CGFloat = (cluster.isGroup ? 46 : 40) + (isLegendary ? 8 : isRarePlus ? 4 : 0)
+        let height = width * 1.32
+        let headDiameter = width * 0.66
+
+        ZStack(alignment: .top) {
+            if isRarePlus {
+                PinShape()
+                    .fill(tierColor.opacity(0.45))
+                    .frame(width: width + 12, height: height + 12)
+                    .blur(radius: 6)
+            }
+
+            PinShape()
+                .fill(allMine ? Color.blue : tierColor)
+                .overlay(
+                    PinShape().stroke(.white.opacity(0.95), lineWidth: isLegendary ? 2.5 : 1.5)
+                )
+                .frame(width: width, height: height)
                 .shadow(radius: 3)
 
-            if cluster.isGroup {
-                Text("\(cluster.count)")
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(.black)
-            } else {
-                Image(systemName: allMine ? "person.fill" : "mappin")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.black)
+            // Logo sits inside the circular head, centered at width/2 from top.
+            ZStack {
+                Circle()
+                    .fill(cluster.isGroup ? Color.white : meccaColor)
+                    .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 1))
+                    .frame(width: headDiameter, height: headDiameter)
+                head(headDiameter: headDiameter)
             }
+            .frame(width: width, height: width)
         }
+        .frame(width: width + 12, height: height + 12, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func head(headDiameter: CGFloat) -> some View {
+        if cluster.isGroup {
+            Text("\(cluster.count)")
+                .font(.system(size: headDiameter * 0.5, weight: .black))
+                .foregroundStyle(.black)
+        } else {
+            Image(systemName: "figure.stand")
+                .font(.system(size: headDiameter * 0.64, weight: .bold))
+                .foregroundStyle(meccaInk)
+        }
+    }
+}
+
+/// A classic downward map-pin outline: a circular head with a pointed tip at the
+/// bottom center.
+private struct PinShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width
+        let radius = width / 2
+        let center = CGPoint(x: rect.midX, y: rect.minY + radius)
+        let tip = CGPoint(x: rect.midX, y: rect.maxY)
+
+        var path = Path()
+        path.move(to: tip)
+        path.addQuadCurve(
+            to: CGPoint(x: center.x - radius, y: center.y),
+            control: CGPoint(x: center.x - radius, y: rect.maxY * 0.62)
+        )
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(180),
+            endAngle: .degrees(0),
+            clockwise: true
+        )
+        path.addQuadCurve(
+            to: tip,
+            control: CGPoint(x: center.x + radius, y: rect.maxY * 0.62)
+        )
+        path.closeSubpath()
+        return path
     }
 }
 

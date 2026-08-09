@@ -1,5 +1,6 @@
 import ARKit
 import RealityKit
+import UIKit
 
 /// Positions a Mecca entity once in a compass-aligned AR scene, using the
 /// target's saved coordinate. Once the first AR camera frame provides a stable
@@ -28,6 +29,8 @@ final class ARMeccaPlacer {
     private var pendingPlacement: PendingPlacement?
     private var frameRetryTask: Task<Void, Never>?
     private var generation = 0
+    private var facePhoto: UIImage?
+    private var appliedFacePhotoIdentity: ObjectIdentifier?
 
     private var appearanceOrientation: simd_quatf {
         let xRadians = Float(appearance.xRotationDegrees) * .pi / 180
@@ -51,10 +54,12 @@ final class ARMeccaPlacer {
         lateralOffsetMeters: Double = 0,
         headingDegrees: Double? = nil,
         appearance: MeccaAppearance = .default,
+        facePhoto: UIImage? = nil,
         in arView: ARView
     ) {
         _ = freezeWithinMeters
         self.appearance = appearance
+        self.facePhoto = facePhoto
         pendingPlacement = PendingPlacement(
             bearingDegrees: bearingDegrees,
             distanceMeters: distanceMeters,
@@ -65,6 +70,30 @@ final class ARMeccaPlacer {
         if !positionLatest(in: arView) {
             retryWhenCameraFrameIsReady(in: arView)
         }
+        applyFacePhotoIfNeeded()
+    }
+
+    /// Camera-relative compatibility for world-map/geo callers. It still uses
+    /// the anchor-once path, so later compass and camera updates cannot move the
+    /// visible Mecca.
+    func updateCameraRelative(
+        targetBearingDegrees: Double,
+        deviceHeadingDegrees: Double,
+        distanceMeters: Double,
+        freezeWithinMeters: Double,
+        appearance: MeccaAppearance = .default,
+        facePhoto: UIImage? = nil,
+        in arView: ARView
+    ) {
+        update(
+            bearingDegrees: targetBearingDegrees,
+            distanceMeters: distanceMeters,
+            freezeWithinMeters: freezeWithinMeters,
+            headingDegrees: deviceHeadingDegrees,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
     }
 
     @discardableResult
@@ -150,7 +179,20 @@ final class ARMeccaPlacer {
         pendingPlacement = nil
         isCreating = false
         isAnchored = false
+        appliedFacePhotoIdentity = nil
         generation += 1
+    }
+
+    private func applyFacePhotoIfNeeded() {
+        guard let meccaRoot else { return }
+        let identity = facePhoto.map(ObjectIdentifier.init)
+        guard identity != appliedFacePhotoIdentity else { return }
+        _ = MeccaEntityFactory.applyFacePhoto(
+            facePhoto,
+            placement: .initial,
+            to: meccaRoot
+        )
+        appliedFacePhotoIdentity = identity
     }
 
     private func ensureEntity(in arView: ARView) {
@@ -174,6 +216,7 @@ final class ARMeccaPlacer {
             anchor.addChild(entity)
             self?.meccaRoot = entity
             self?.isCreating = false
+            self?.applyFacePhotoIfNeeded()
             if self?.positionLatest(in: arView) == false {
                 self?.retryWhenCameraFrameIsReady(in: arView)
             }
