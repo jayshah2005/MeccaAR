@@ -1,4 +1,5 @@
 import ARKit
+import Combine
 import RealityKit
 import SwiftUI
 import UIKit
@@ -23,6 +24,8 @@ struct PlacementView: View {
     @State private var saveStatus = "Save to map"
     @State private var arSession = PlacementARSession()
     @State private var mappingQuality: ARFrame.WorldMappingStatus = .notAvailable
+    @State private var canPlace = false
+    @State private var placeToken = 0
 
     private var configuration: MeccaPlacementConfiguration {
         let referenceMillimeters = Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
@@ -55,11 +58,13 @@ struct PlacementView: View {
                 resetToken: resetToken,
                 message: $message,
                 configuration: configuration,
-                session: arSession
+                session: arSession,
+                canPlace: $canPlace,
+                placeToken: placeToken
             )
             .ignoresSafeArea()
 
-            Crosshair()
+            Crosshair(active: canPlace)
 
             VStack(spacing: 16) {
                 HStack {
@@ -87,6 +92,8 @@ struct PlacementView: View {
                 }
 
                 Spacer()
+
+                placeButton
 
                 VStack(spacing: 10) {
                     HStack(spacing: 12) {
@@ -125,7 +132,7 @@ struct PlacementView: View {
                     }
 
                     if !isToolbarMinimized {
-                        Text("Aim the reticle at a floor, table, wall, or other flat surface, then tap the camera view.")
+                        Text("Point the reticle at a floor, table, or wall. When it turns green, tap Place Mecca.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -193,6 +200,27 @@ struct PlacementView: View {
                 try? await Task.sleep(nanoseconds: 600_000_000)
             }
         }
+    }
+
+    private var placeButton: some View {
+        Button {
+            placeToken += 1
+        } label: {
+            Label(canPlace ? "Place Mecca" : "Scanning for a surface…",
+                  systemImage: canPlace ? "plus.viewfinder" : "viewfinder")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(canPlace ? .mint : .gray)
+        .disabled(!canPlace)
+        .opacity(canPlace ? 1 : 0.55)
+        .padding(.horizontal, 8)
+        .animation(.easeInOut(duration: 0.2), value: canPlace)
+        .accessibilityHint(canPlace
+            ? "Places a Mecca where the reticle is pointing"
+            : "Move your phone to scan a surface before placing")
     }
 
     @ViewBuilder
@@ -555,16 +583,20 @@ private struct AxisRotationControl: View {
 }
 
 private struct Crosshair: View {
+    var active: Bool = false
+
     var body: some View {
+        let color: Color = active ? .green : .white
         ZStack {
             Circle()
-                .stroke(.white.opacity(0.9), lineWidth: 2)
+                .stroke(color.opacity(0.95), lineWidth: 2)
                 .frame(width: 34, height: 34)
             Circle()
-                .fill(.white)
+                .fill(color)
                 .frame(width: 4, height: 4)
         }
         .shadow(color: .black.opacity(0.75), radius: 3)
+        .animation(.easeInOut(duration: 0.2), value: active)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -576,6 +608,8 @@ private struct PlacementARView: UIViewRepresentable {
     @Binding var message: String
     let configuration: MeccaPlacementConfiguration
     let session: PlacementARSession
+    @Binding var canPlace: Bool
+    let placeToken: Int
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -589,7 +623,7 @@ private struct PlacementARView: UIViewRepresentable {
 
         let tap = UITapGestureRecognizer(
             target: context.coordinator,
-            action: #selector(Coordinator.placeMecca(_:))
+            action: #selector(Coordinator.handleTap(_:))
         )
         arView.addGestureRecognizer(tap)
 
@@ -607,6 +641,7 @@ private struct PlacementARView: UIViewRepresentable {
         ])
 
         context.coordinator.runSession()
+        context.coordinator.beginTracking()
         return arView
     }
 
@@ -614,9 +649,11 @@ private struct PlacementARView: UIViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.clearIfNeeded(resetToken: resetToken)
         context.coordinator.applyConfigurationToLatestMecca()
+        context.coordinator.handlePlaceToken(placeToken)
     }
 
     static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
+        coordinator.tearDown()
         arView.session.pause()
     }
 
@@ -630,6 +667,11 @@ private struct PlacementARView: UIViewRepresentable {
             let entity: Entity
         }
 
+        private struct SurfaceHit {
+            let transform: simd_float4x4
+            let normal: SIMD3<Float>
+        }
+
         private var placedMeccas: [PlacedMecca] = []
         private var lastResetToken: Int
         private var lastAppliedConfiguration: MeccaPlacementConfiguration?
@@ -637,9 +679,18 @@ private struct PlacementARView: UIViewRepresentable {
         /// relocalization. Only the most recent placement is kept.
         private var persistedAnchor: ARAnchor?
 
+        // Live placement feedback.
+        private var updateSubscription: (any Cancellable)?
+        private var reticleAnchor: AnchorEntity?
+        private var reticle: ModelEntity?
+        private var latestHit: SurfaceHit?
+        private var lastReportedCanPlace = false
+        private var lastPlaceToken = 0
+
         init(_ parent: PlacementARView) {
             self.parent = parent
             lastResetToken = parent.resetToken
+            lastPlaceToken = parent.placeToken
         }
 
         func runSession() {
@@ -648,6 +699,12 @@ private struct PlacementARView: UIViewRepresentable {
             let configuration = ARWorldTrackingConfiguration()
             configuration.planeDetection = [.horizontal, .vertical]
             configuration.environmentTexturing = .automatic
+            // LiDAR devices get a full scene mesh, which makes surface detection
+            // (and therefore placement) far more reliable, even on low-texture
+            // walls and floors.
+            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+                configuration.sceneReconstruction = .mesh
+            }
 
             arView.session.run(
                 configuration,
@@ -655,37 +712,126 @@ private struct PlacementARView: UIViewRepresentable {
             )
         }
 
-        @objc
-        func placeMecca(_: UITapGestureRecognizer) {
+        /// Builds the placement reticle and starts a per-frame loop that raycasts
+        /// from the screen center to show where a Mecca would land.
+        func beginTracking() {
             guard let arView else { return }
 
-            let point = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-            guard let result = arView.raycast(
-                from: point,
-                allowing: .estimatedPlane,
-                alignment: .any
-            ).first else {
+            let reticle = ModelEntity(
+                mesh: .generatePlane(width: 0.09, depth: 0.09, cornerRadius: 0.045),
+                materials: [Self.reticleMaterial(valid: true)]
+            )
+            reticle.isEnabled = false
+            let anchor = AnchorEntity(world: .zero)
+            anchor.addChild(reticle)
+            arView.scene.addAnchor(anchor)
+            self.reticle = reticle
+            self.reticleAnchor = anchor
+
+            updateSubscription = arView.scene.subscribe(
+                to: SceneEvents.Update.self
+            ) { [weak self] _ in
+                self?.refreshReticle()
+            }
+        }
+
+        func tearDown() {
+            updateSubscription?.cancel()
+            updateSubscription = nil
+        }
+
+        private func refreshReticle() {
+            guard let arView, let reticle else { return }
+
+            if let hit = bestSurfaceHit() {
+                latestHit = hit
+                // Orient the flat reticle so its up (+Y) matches the surface.
+                let rotation = simd_quatf(from: [0, 1, 0], to: hit.normal)
+                let position = SIMD3<Float>(
+                    hit.transform.columns.3.x,
+                    hit.transform.columns.3.y,
+                    hit.transform.columns.3.z
+                )
+                reticleAnchor?.transform = Transform(
+                    scale: SIMD3<Float>(repeating: 1),
+                    rotation: rotation,
+                    translation: position
+                )
+                reticle.isEnabled = true
+                setCanPlace(true)
+            } else {
+                latestHit = nil
+                reticle.isEnabled = false
+                setCanPlace(false)
+            }
+        }
+
+        private func setCanPlace(_ value: Bool) {
+            guard value != lastReportedCanPlace else { return }
+            lastReportedCanPlace = value
+            parent.canPlace = value
+            if placedMeccas.isEmpty {
+                parent.message = value
+                    ? "Surface found — tap Place Mecca"
+                    : "Move your phone slowly to scan a surface"
+            }
+        }
+
+        /// Tries progressively looser raycast targets so placement works on
+        /// mapped planes, their infinite extensions, and rough estimates.
+        private func bestSurfaceHit() -> SurfaceHit? {
+            guard let arView else { return nil }
+            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            let targets: [ARRaycastQuery.Target] = [
+                .existingPlaneGeometry,
+                .existingPlaneInfinite,
+                .estimatedPlane
+            ]
+            for target in targets {
+                if let result = arView.raycast(
+                    from: center,
+                    allowing: target,
+                    alignment: .any
+                ).first {
+                    let normal = SIMD3<Float>(
+                        result.worldTransform.columns.1.x,
+                        result.worldTransform.columns.1.y,
+                        result.worldTransform.columns.1.z
+                    )
+                    let normalized = simd_length(normal) > 0
+                        ? simd_normalize(normal)
+                        : SIMD3<Float>(0, 1, 0)
+                    return SurfaceHit(transform: result.worldTransform, normal: normalized)
+                }
+            }
+            return nil
+        }
+
+        @objc
+        func handleTap(_: UITapGestureRecognizer) {
+            place()
+        }
+
+        func handlePlaceToken(_ token: Int) {
+            guard token != lastPlaceToken else { return }
+            lastPlaceToken = token
+            place()
+        }
+
+        private func place() {
+            guard let arView, let hit = latestHit else {
                 parent.message = "No surface found yet — keep scanning and try again"
                 return
             }
 
             // Keep the character upright in gravity-aligned world space even
-            // when the raycast hits a vertical plane. The hit transform's Y
-            // axis is still used as the surface normal to avoid wall clipping.
+            // when the surface is a wall. The surface normal is still used to
+            // lift the anchor slightly off the surface to avoid clipping.
             var anchorTransform = matrix_identity_float4x4
-            anchorTransform.columns.3 = result.worldTransform.columns.3
-            let surfaceNormal = SIMD3<Float>(
-                result.worldTransform.columns.1.x,
-                result.worldTransform.columns.1.y,
-                result.worldTransform.columns.1.z
-            )
-            let normalizedNormal = simd_length(surfaceNormal) > 0
-                ? simd_normalize(surfaceNormal)
-                : SIMD3<Float>(0, 1, 0)
-
-            anchorTransform.columns.3.x += normalizedNormal.x * 0.015
-            anchorTransform.columns.3.y += normalizedNormal.y * 0.015
-            anchorTransform.columns.3.z += normalizedNormal.z * 0.015
+            anchorTransform.columns.3 = hit.transform.columns.3
+            anchorTransform.columns.3.x += hit.normal.x * 0.015
+            anchorTransform.columns.3.y += hit.normal.y * 0.015
+            anchorTransform.columns.3.z += hit.normal.z * 0.015
 
             let anchor = AnchorEntity(world: anchorTransform)
             let placementConfiguration = parent.configuration
@@ -719,7 +865,7 @@ private struct PlacementARView: UIViewRepresentable {
                 self.lastAppliedConfiguration = placementConfiguration
 
                 self.parent.placementCount += 1
-                self.parent.message = "Mecca placed in this AR session"
+                self.parent.message = "Mecca placed — adjust it below or save it"
             }
         }
 
@@ -760,6 +906,13 @@ private struct PlacementARView: UIViewRepresentable {
             let xRotation = simd_quatf(angle: xRadians, axis: [1, 0, 0])
             let yRotation = simd_quatf(angle: yRadians, axis: [0, 1, 0])
             placedMecca.entity.orientation = yRotation * xRotation
+        }
+
+        private static func reticleMaterial(valid: Bool) -> UnlitMaterial {
+            UnlitMaterial(
+                color: (valid ? UIColor.systemGreen : UIColor.systemRed)
+                    .withAlphaComponent(0.55)
+            )
         }
     }
 }
