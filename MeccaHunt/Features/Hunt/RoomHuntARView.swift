@@ -25,6 +25,11 @@ struct RoomHuntARView: View {
     @State private var primaryWorldMapUnavailable = false
     @State private var preciseState: PreciseMeccaARController.State = .initializing
     @State private var facePhotos: [UUID: UIImage] = [:]
+    @State private var awardedPoints = 0
+
+    private enum FallbackTiming {
+        static let preciseSeconds: TimeInterval = 20
+    }
 
     init(
         targets: [Mecca],
@@ -118,9 +123,14 @@ struct RoomHuntARView: View {
         .task { await MeccaEntityFactory.preload() }
         .task { await loadPrimaryWorldMapIfNeeded() }
         .task { await loadFacePhotos() }
+        .task(id: preciseFallbackKey) { await watchPreciseFallback() }
         .onChange(of: tappedMeccaID) { _, meccaID in
             if let meccaID { claim(meccaID) }
         }
+    }
+
+    private var preciseFallbackKey: String {
+        primaryWorldMap == nil || primaryWorldMapUnavailable ? "none" : "precise"
     }
 
     private var topBar: some View {
@@ -216,7 +226,14 @@ struct RoomHuntARView: View {
             !didAttemptWorldMapLoad,
             let primary = targets.first,
             primary.hasWorldMap
-        else { return }
+        else {
+            if let map = primaryWorldMap,
+               !ARWorldMapArchiver.containsMeccaAnchor(map) {
+                primaryWorldMapUnavailable = true
+                primaryWorldMap = nil
+            }
+            return
+        }
 
         didAttemptWorldMapLoad = true
         do {
@@ -224,12 +241,28 @@ struct RoomHuntARView: View {
                 primaryWorldMapUnavailable = true
                 return
             }
-            primaryWorldMap = try ARWorldMapArchiver.decode(data)
+            let map = try ARWorldMapArchiver.decode(data)
+            guard ARWorldMapArchiver.containsMeccaAnchor(map) else {
+                // Without the named Mecca anchor, precise lock can never place.
+                primaryWorldMapUnavailable = true
+                return
+            }
+            primaryWorldMap = map
         } catch {
             // Coordinate placement remains visible if a legacy map is missing
             // or corrupt; newly created Meccas require an atomic map upload.
             primaryWorldMapUnavailable = true
         }
+    }
+
+    /// If exact lock never finishes, fall back so the primary is still visible
+    /// as a GPS placer like the other room Meccas.
+    private func watchPreciseFallback() async {
+        guard primaryWorldMap != nil, !primaryWorldMapUnavailable else { return }
+        try? await Task.sleep(nanoseconds: UInt64(FallbackTiming.preciseSeconds * 1_000_000_000))
+        guard !Task.isCancelled, preciseState != .located, !primaryWorldMapUnavailable else { return }
+        primaryWorldMapUnavailable = true
+        primaryWorldMap = nil
     }
 
     private func loadFacePhotos() async {
@@ -251,7 +284,7 @@ struct RoomHuntARView: View {
                     .foregroundStyle(.mint)
                 Text("Mecca hunted!")
                     .font(.largeTitle.bold())
-                Text("+\(mecca.currentPoints) points for finding \(mecca.name).")
+                Text("+\(awardedPoints) points for finding \(mecca.name).")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -278,9 +311,9 @@ struct RoomHuntARView: View {
 
     private func claim(_ meccaID: UUID) {
         switch claimState {
-        case .searching, .failed(_):
+        case .searching, .failed:
             break
-        case .claiming(_), .claimed(_):
+        case .claiming, .claimed:
             tappedMeccaID = nil
             return
         }
@@ -296,10 +329,11 @@ struct RoomHuntARView: View {
         claimState = .claiming(target)
         Task {
             do {
-                _ = try await appState.dependencies.meccas.claim(
+                let claim = try await appState.dependencies.meccas.claim(
                     meccaID: target.id,
                     hunterID: hunterID
                 )
+                awardedPoints = claim.awardedPoints
                 removedMeccaIDs.insert(target.id)
                 tappedMeccaID = nil
                 await onClaimed()
@@ -419,8 +453,17 @@ private struct RoomHuntARContainer: UIViewRepresentable {
             }
             guard !hasCleared else { return }
 
+            // Precise lock timed out / map unusable — drop the primary controller
+            // so a GPS placer can show the selected Mecca immediately.
+            if hasActivatedPrimaryWorldMap && !parent.reservePrimaryForExactMap {
+                preciseController?.clear()
+                preciseController = nil
+                hasActivatedPrimaryWorldMap = false
+            }
+
             if let worldMap = parent.primaryWorldMap,
                !hasActivatedPrimaryWorldMap,
+               parent.reservePrimaryForExactMap,
                let primaryID = parent.primaryMeccaID,
                let primary = placements.first(where: { $0.id == primaryID }) {
                 activatePrimaryWorldMap(
@@ -430,10 +473,28 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                 )
             }
 
-            for placement in placements
-            where placers[placement.id] == nil
-                && (!(hasActivatedPrimaryWorldMap || parent.reservePrimaryForExactMap)
-                    || placement.id != parent.primaryMeccaID) {
+            for placement in placements {
+                let isReservedPrimary = parent.reservePrimaryForExactMap
+                    && placement.id == parent.primaryMeccaID
+                if isReservedPrimary { continue }
+
+                if let placer = placers[placement.id] {
+                    // Re-apply face photos that finished downloading after create.
+                    placer.update(
+                        bearingDegrees: placement.bearingDegrees,
+                        distanceMeters: placement.distanceMeters,
+                        freezeWithinMeters: .greatestFiniteMagnitude,
+                        lateralOffsetMeters: placement.lateralOffsetMeters,
+                        headingDegrees: hasActivatedPrimaryWorldMap
+                            ? placement.headingDegrees
+                            : nil,
+                        appearance: placement.appearance,
+                        facePhoto: placement.facePhoto,
+                        in: arView
+                    )
+                    continue
+                }
+
                 let placer = ARMeccaPlacer()
                 placers[placement.id] = placer
                 placer.update(
@@ -448,6 +509,12 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                     facePhoto: placement.facePhoto,
                     in: arView
                 )
+            }
+
+            if let primaryID = parent.primaryMeccaID,
+               hasActivatedPrimaryWorldMap,
+               let face = placements.first(where: { $0.id == primaryID })?.facePhoto {
+                preciseController?.updateFacePhoto(face)
             }
         }
 
@@ -471,7 +538,11 @@ private struct RoomHuntARContainer: UIViewRepresentable {
             controller.start(
                 worldMap: worldMap,
                 appearance: primary.appearance,
-                fallbackPlacement: nil,
+                fallbackPlacement: PreciseMeccaARController.FallbackPlacement(
+                    bearingDegrees: primary.bearingDegrees,
+                    distanceMeters: primary.distanceMeters,
+                    headingDegrees: primary.headingDegrees
+                ),
                 facePhoto: primary.facePhoto,
                 in: arView
             )

@@ -39,6 +39,11 @@ enum ARWorldMapArchiver {
         featurePointCount(of: map) >= minimumFeaturePoints
     }
 
+    /// True when the named Mecca placement anchor was captured into the map.
+    static func containsMeccaAnchor(_ map: ARWorldMap) -> Bool {
+        map.anchors.contains { $0.name == "mecca" }
+    }
+
     /// Archive + zlib-compress a world map into transportable bytes.
     /// Rejects maps that are too sparse to find later from a different angle.
     static func encode(

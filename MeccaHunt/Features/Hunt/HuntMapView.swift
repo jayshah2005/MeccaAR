@@ -18,6 +18,7 @@ struct HuntMapView: View {
     @State private var model: HuntViewModel?
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var selectedCluster: MeccaCluster?
+    @State private var huntTarget: Mecca?
     @State private var huntRoom: HuntRoomSession?
     @State private var preloadedWorldMaps: [UUID: ARWorldMap] = [:]
     @State private var attemptedWorldMapLoads: Set<UUID> = []
@@ -72,6 +73,11 @@ struct HuntMapView: View {
             )
             .presentationDetents([.medium, .large])
             .preferredColorScheme(.dark)
+        }
+        .fullScreenCover(item: $huntTarget) { target in
+            HuntARView(target: target) {
+                await reload()
+            }
         }
         .fullScreenCover(item: $huntRoom) { room in
             RoomHuntARView(
@@ -311,6 +317,12 @@ struct HuntMapView: View {
         let others = currentHuntableCandidates
             .map(\.mecca)
             .filter { $0.id != primary.id }
+        // Hybrid: one nearby Mecca uses the single-target path (geo/map/GPS
+        // fallbacks). Two or more open a shared room session.
+        if others.isEmpty {
+            huntTarget = primary
+            return
+        }
         huntRoom = HuntRoomSession(
             targets: [primary] + others,
             primaryWorldMap: preloadedWorldMaps[primary.id]

@@ -144,15 +144,13 @@ final class ARMeccaPlacer {
             camera.z + direction.z * distance + right.z * lateralOffset
         )
 
-        meccaRoot.move(
-            to: Transform(
-                scale: SIMD3<Float>(repeating: Self.displayScale),
-                rotation: appearanceOrientation,
-                translation: target
-            ),
-            relativeTo: nil,
-            duration: 0
+        meccaRoot.stopAllAnimations(recursive: true)
+        meccaRoot.transform = Transform(
+            scale: SIMD3<Float>(repeating: Self.displayScale),
+            rotation: appearanceOrientation,
+            translation: target
         )
+        meccaRoot.isEnabled = true
 
         // This is deliberately unconditional. Recomputing this transform from
         // the live camera pose was what made a Mecca drift when it was viewed.
@@ -213,6 +211,9 @@ final class ARMeccaPlacer {
                 to: entity,
                 displayScale: Self.displayScale
             )
+            // Hidden until the first pose is applied so it never flashes at the
+            // world origin and then appears to fly to the target.
+            entity.isEnabled = false
             anchor.addChild(entity)
             self?.meccaRoot = entity
             self?.isCreating = false

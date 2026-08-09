@@ -20,6 +20,8 @@ struct HuntARView: View {
     @State private var claimState: ClaimState = .searching
     @State private var mapLoad: MapLoad = .idle
     @State private var preciseState: PreciseMeccaARController.State = .relocalizing
+    @State private var facePhoto: UIImage?
+    @State private var awardedPoints = 0
 
     private enum ClaimState: Equatable {
         case searching
@@ -34,6 +36,15 @@ struct HuntARView: View {
         case loading
         case ready(ARWorldMap)
         case gpsFallback
+    }
+
+    private enum FallbackTiming {
+        static let preciseSeconds: TimeInterval = 20
+    }
+
+    private var preciseFallbackKey: String {
+        if case .ready = mapLoad { return "precise" }
+        return "none"
     }
 
     private var isPreciseMode: Bool {
@@ -94,6 +105,7 @@ struct HuntARView: View {
         .preferredColorScheme(.dark)
         .task { await MeccaEntityFactory.preload() }
         .task { await loadWorldMap() }
+        .task(id: preciseFallbackKey) { await watchPreciseFallback() }
         .onChange(of: didTapMecca) { _, tapped in
             if tapped { claim() }
         }
@@ -106,6 +118,7 @@ struct HuntARView: View {
             HuntPreciseARContainer(
                 worldMap: map,
                 appearance: target.appearance,
+                facePhoto: facePhoto,
                 fallbackPlacement: approximatePrecisePlacement,
                 didTapMecca: $didTapMecca,
                 state: $preciseState
@@ -114,26 +127,51 @@ struct HuntARView: View {
             HuntARContainer(
                 placement: placement,
                 appearance: target.appearance,
+                facePhoto: facePhoto,
                 didTapMecca: $didTapMecca
             )
         }
     }
 
     private func loadWorldMap() async {
+        async let faceTask: Void = loadFacePhoto()
         guard target.hasWorldMap, case .idle = mapLoad else {
             if !target.hasWorldMap { mapLoad = .gpsFallback }
+            await faceTask
             return
         }
         mapLoad = .loading
         do {
             guard let data = try await appState.dependencies.meccas.worldMap(for: target.id) else {
                 mapLoad = .gpsFallback
+                await faceTask
                 return
             }
-            mapLoad = .ready(try ARWorldMapArchiver.decode(data))
+            let map = try ARWorldMapArchiver.decode(data)
+            if ARWorldMapArchiver.containsMeccaAnchor(map) {
+                mapLoad = .ready(map)
+            } else {
+                mapLoad = .gpsFallback
+            }
         } catch {
             mapLoad = .gpsFallback
         }
+        await faceTask
+    }
+
+    private func loadFacePhoto() async {
+        guard target.hasFacePhoto else { return }
+        guard let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
+              let image = UIImage(data: data)
+        else { return }
+        facePhoto = image
+    }
+
+    private func watchPreciseFallback() async {
+        guard case .ready = mapLoad else { return }
+        try? await Task.sleep(nanoseconds: UInt64(FallbackTiming.preciseSeconds * 1_000_000_000))
+        guard !Task.isCancelled, case .ready = mapLoad, preciseState != .located else { return }
+        mapLoad = .gpsFallback
     }
 
     private var topBar: some View {
@@ -245,7 +283,7 @@ struct HuntARView: View {
                     .foregroundStyle(.mint)
                 Text("Mecca hunted!")
                     .font(.largeTitle.bold())
-                Text("+\(target.currentPoints) points for finding \(target.name).")
+                Text("+\(awardedPoints) points for finding \(target.name).")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -268,10 +306,11 @@ struct HuntARView: View {
         claimState = .claiming
         Task {
             do {
-                _ = try await appState.dependencies.meccas.claim(
+                let claim = try await appState.dependencies.meccas.claim(
                     meccaID: target.id,
                     hunterID: hunterID
                 )
+                awardedPoints = claim.awardedPoints
                 claimState = .claimed
             } catch {
                 claimState = .failed(
@@ -305,6 +344,7 @@ private struct Crosshair: View {
 private struct HuntARContainer: UIViewRepresentable {
     let placement: HuntPlacement?
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
     @Binding var didTapMecca: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -332,6 +372,7 @@ private struct HuntARContainer: UIViewRepresentable {
                 distanceMeters: placement.distanceMeters,
                 freezeWithinMeters: HuntTuning.hintUntilMeters,
                 appearance: appearance,
+                facePhoto: facePhoto,
                 in: arView
             )
         }
@@ -377,6 +418,7 @@ private struct HuntARContainer: UIViewRepresentable {
 private struct HuntPreciseARContainer: UIViewRepresentable {
     let worldMap: ARWorldMap
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
     let fallbackPlacement: PreciseMeccaARController.FallbackPlacement?
     @Binding var didTapMecca: Bool
     @Binding var state: PreciseMeccaARController.State
@@ -401,6 +443,7 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
             worldMap: worldMap,
             appearance: appearance,
             fallbackPlacement: fallbackPlacement,
+            facePhoto: facePhoto,
             in: arView
         )
         return arView
@@ -409,6 +452,7 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.controller.updateFallback(fallbackPlacement)
+        context.coordinator.controller.updateFacePhoto(facePhoto)
     }
 
     static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {

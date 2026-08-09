@@ -118,9 +118,25 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
         fixedAnchor = nil
         meccaEntity = nil
         fallbackIsVisible = false
+        fallbackEnabled = false
+        fallbackPlacement = nil
+        facePhoto = nil
         placed = false
+        relocalized = false
+        resolvedTransform = nil
         isCreatingEntity = false
         generation += 1
+    }
+
+    /// Applies a face photo that arrived after `start` (async download).
+    func updateFacePhoto(_ image: UIImage?) {
+        facePhoto = image
+        guard let meccaEntity else { return }
+        _ = MeccaEntityFactory.applyFacePhoto(
+            image,
+            placement: .initial,
+            to: meccaEntity
+        )
     }
 
     // MARK: ARSessionDelegate

@@ -1,3 +1,8 @@
-// Copy this file to Local.xcconfig and fill in your local Debug credential.
-// $() prevents xcconfig from treating the second slash as a comment.
+// Copy this file to Local.xcconfig and fill in your local credential.
+// Local.xcconfig is gitignored. Escape `://` as `:/$()/` so xcconfig
+// does not treat `//` as a comment start.
+//
+// Example:
+// NEON_CONNECTION_STRING = postgresql:/$()/USER:PASSWORD@HOST/DATABASE?sslmode=require&channel_binding=require
+
 NEON_CONNECTION_STRING = postgresql:/$()/USER:PASSWORD@HOST/DATABASE?sslmode=require

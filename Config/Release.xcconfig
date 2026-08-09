@@ -1,2 +1,4 @@
-// Never embed a database owner credential in a distributed app.
+// Prefer Local.xcconfig (gitignored) for credentials so Release device builds work
+// without embedding secrets in the committed project.
 NEON_CONNECTION_STRING =
+#include? "Local.xcconfig"

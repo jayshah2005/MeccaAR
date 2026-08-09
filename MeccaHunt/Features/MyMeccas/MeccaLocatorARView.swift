@@ -113,29 +113,31 @@ struct MeccaLocatorARView: View {
     }
 
     private func loadWorldMap() async {
-        async let faceTask: Void = loadFacePhoto()
+        // Load the face first so geo/precise containers start with it applied.
+        await loadFacePhoto()
         if target.placementMode == .geo {
             mapLoad = .geo
-            await faceTask
             return
         }
         guard target.hasWorldMap, case .idle = mapLoad else {
             if !target.hasWorldMap { mapLoad = .gpsFallback }
-            await faceTask
             return
         }
         mapLoad = .loading
         do {
             guard let data = try await appState.dependencies.meccas.worldMap(for: target.id) else {
                 mapLoad = .gpsFallback
-                await faceTask
                 return
             }
-            mapLoad = .ready(try ARWorldMapArchiver.decode(data))
+            let map = try ARWorldMapArchiver.decode(data)
+            if ARWorldMapArchiver.containsMeccaAnchor(map) {
+                mapLoad = .ready(map)
+            } else {
+                mapLoad = .gpsFallback
+            }
         } catch {
             mapLoad = .gpsFallback
         }
-        await faceTask
     }
 
     private func loadFacePhoto() async {
@@ -329,6 +331,7 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.controller.updateFacePhoto(facePhoto)
         guard
             context.coordinator.parent.state != .located,
             let placement,
@@ -397,6 +400,7 @@ private struct LocatorGeoARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.controller.updateFacePhoto(facePhoto)
         guard
             context.coordinator.parent.state != .located,
             let placement,

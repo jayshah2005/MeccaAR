@@ -148,4 +148,11 @@ final class GeoMeccaARController: NSObject, ARSessionDelegate,
             placeIfReady(using: anchors)
         }
     }
+
+    /// Applies a face photo that arrived after `start` (async download).
+    func updateFacePhoto(_ image: UIImage?) {
+        facePhoto = image
+        guard let meccaEntity else { return }
+        _ = MeccaEntityFactory.applyFacePhoto(image, to: meccaEntity)
+    }
 }
