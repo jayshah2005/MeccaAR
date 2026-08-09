@@ -27,6 +27,7 @@ struct HuntMapView: View {
     @State private var myPoints = 0
     @State private var showDeleteAccount = false
     @State private var accountError: String?
+    @State private var didCenterOnUser = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -62,6 +63,10 @@ struct HuntMapView: View {
             }
             location.start()
             await reload()
+            centerOnUserIfNeeded()
+        }
+        .onChange(of: location.currentLocation?.timestamp) { _, _ in
+            centerOnUserIfNeeded()
         }
         .task(id: huntableWorldMapIDs) {
             await preloadNearbyWorldMaps()
@@ -127,7 +132,32 @@ struct HuntMapView: View {
 
     private var mapLayer: some View {
         Map(position: $camera) {
+            // System blue puck plus our labeled GPS marker so "you" stay
+            // visible next to Mecca pins.
             UserAnnotation()
+
+            if let userLocation = location.currentLocation {
+                MapCircle(
+                    center: userLocation.coordinate,
+                    radius: max(userLocation.horizontalAccuracy, 12)
+                )
+                .foregroundStyle(Color.mint.opacity(0.14))
+                .stroke(Color.mint.opacity(0.55), lineWidth: 1.5)
+
+                Annotation(
+                    "You",
+                    coordinate: userLocation.coordinate,
+                    anchor: .center
+                ) {
+                    YouAreHereMarker(
+                        headingDegrees: location.heading.flatMap { reading in
+                            if reading.trueHeading >= 0 { return reading.trueHeading }
+                            if reading.magneticHeading >= 0 { return reading.magneticHeading }
+                            return nil
+                        }
+                    )
+                }
+            }
 
             ForEach(model?.clusters ?? []) { cluster in
                 Annotation(
@@ -144,6 +174,30 @@ struct HuntMapView: View {
             MapUserLocationButton()
             MapCompass()
         }
+        .mapStyle(.standard(pointsOfInterest: .excludingAll))
+        // MapKit always draws Apple Maps + Legal; cover that strip so it does
+        // not sit on top of the hunt UI.
+        .overlay(alignment: .bottomLeading) {
+            Color.black
+                .frame(width: 150, height: 40)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// First GPS fix centers the map so Meccas and the user appear together.
+    private func centerOnUserIfNeeded() {
+        guard !didCenterOnUser, let userLocation = location.currentLocation else { return }
+        didCenterOnUser = true
+        withAnimation(.easeInOut(duration: 0.5)) {
+            camera = .region(
+                MKCoordinateRegion(
+                    center: userLocation.coordinate,
+                    latitudinalMeters: 900,
+                    longitudinalMeters: 900
+                )
+            )
+        }
     }
 
     private func clusterTitle(_ cluster: MeccaCluster) -> String {
@@ -153,19 +207,19 @@ struct HuntMapView: View {
     // MARK: Top bar
 
     private var topBar: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(appState.currentUser?.username ?? "hunter")
                     .font(.headline)
+                    .lineLimit(1)
                 Text("\(myPoints) point\(myPoints == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.mint)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(.ultraThinMaterial, in: Capsule())
-
-            Spacer()
 
             Button {
                 showValuableNearby = true
@@ -460,6 +514,38 @@ private struct OffFloorRow: View {
 }
 
 // MARK: - Map marker
+
+/// GPS “you are here” marker shown with Mecca pins. Arrow rotates with compass
+/// heading when available.
+private struct YouAreHereMarker: View {
+    let headingDegrees: Double?
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.mint.opacity(0.25))
+                .frame(width: 44, height: 44)
+
+            Circle()
+                .fill(.mint)
+                .frame(width: 18, height: 18)
+                .overlay {
+                    Circle()
+                        .stroke(.white, lineWidth: 3)
+                }
+                .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+
+            if let headingDegrees {
+                Image(systemName: "location.north.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .offset(y: -16)
+                    .rotationEffect(.degrees(headingDegrees))
+            }
+        }
+        .accessibilityLabel("Your GPS location")
+    }
+}
 
 /// An upside-down teardrop map pin whose color signals rarity and whose head
 /// shows the Mecca itself (a figure tinted with the Mecca's own color), so a
