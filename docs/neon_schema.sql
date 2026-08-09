@@ -24,6 +24,8 @@ create table if not exists meccas (
     tint_red   double precision not null default 1,
     tint_green double precision not null default 1,
     tint_blue  double precision not null default 1,
+    -- 'world_map' (indoor/LiDAR AR map) or 'geo' (outdoor ARGeoTracking).
+    placement_mode text not null default 'world_map',
     created_at timestamptz not null default now(),
     state      text not null default 'active'
 );
@@ -42,6 +44,14 @@ create table if not exists hunt_claims (
 -- hunter's device relocalize to the exact spot it was hidden. GPS is only a
 -- coarse gate; this is what delivers cm-level accuracy.
 create table if not exists mecca_world_maps (
+    mecca_id   uuid primary key references meccas(id) on delete cascade,
+    data       text not null,
+    created_at timestamptz not null default now()
+);
+
+-- Optional face photo (JPEG, base64 text) chosen while hiding a Mecca, so
+-- hunters see the same face overlay when they find it.
+create table if not exists mecca_face_photos (
     mecca_id   uuid primary key references meccas(id) on delete cascade,
     data       text not null,
     created_at timestamptz not null default now()

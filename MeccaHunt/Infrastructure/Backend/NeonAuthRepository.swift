@@ -41,6 +41,10 @@ struct NeonAuthRepository: AuthRepository {
                 delete from mecca_world_maps
                 where mecca_id in (select id from meccas where owner_id = $1::uuid)
             ),
+            del_faces as (
+                delete from mecca_face_photos
+                where mecca_id in (select id from meccas where owner_id = $1::uuid)
+            ),
             del_claims_on_mine as (
                 delete from hunt_claims
                 where mecca_id in (select id from meccas where owner_id = $1::uuid)

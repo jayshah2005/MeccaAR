@@ -20,7 +20,9 @@ struct HuntARView: View {
     @State private var claimState: ClaimState = .searching
     @State private var mapLoad: MapLoad = .idle
     @State private var preciseState: PreciseMeccaARController.State = .relocalizing
+    @State private var geoState: GeoMeccaARController.State = .localizing
     @State private var awardedPoints = 0
+    @State private var facePhoto: UIImage?
 
     private enum ClaimState: Equatable {
         case searching
@@ -34,11 +36,17 @@ struct HuntARView: View {
         case idle
         case loading
         case ready(ARWorldMap)
+        case geo
         case gpsFallback
     }
 
     private var isPreciseMode: Bool {
         if case .ready = mapLoad { return true }
+        return false
+    }
+
+    private var isGeoMode: Bool {
+        if case .geo = mapLoad { return true }
         return false
     }
 
@@ -93,33 +101,67 @@ struct HuntARView: View {
             HuntPreciseARContainer(
                 worldMap: map,
                 appearance: target.appearance,
+                facePhoto: facePhoto,
+                placement: placement,
+                deviceHeadingDegrees: location.heading?.trueHeading
+                    ?? location.heading?.magneticHeading,
                 didTapMecca: $didTapMecca,
                 state: $preciseState
+            )
+        case .geo:
+            HuntGeoARContainer(
+                coordinate: targetCoordinate,
+                altitude: target.altitude,
+                appearance: target.appearance,
+                facePhoto: facePhoto,
+                placement: placement,
+                deviceHeadingDegrees: location.heading?.trueHeading
+                    ?? location.heading?.magneticHeading,
+                didTapMecca: $didTapMecca,
+                state: $geoState
             )
         case .idle, .loading, .gpsFallback:
             HuntARContainer(
                 placement: placement,
                 appearance: target.appearance,
+                facePhoto: facePhoto,
                 didTapMecca: $didTapMecca
             )
         }
     }
 
     private func loadWorldMap() async {
+        async let faceTask: Void = loadFacePhoto()
+        if target.placementMode == .geo {
+            mapLoad = .geo
+            await faceTask
+            return
+        }
         guard target.hasWorldMap, case .idle = mapLoad else {
             if !target.hasWorldMap { mapLoad = .gpsFallback }
+            await faceTask
             return
         }
         mapLoad = .loading
         do {
             guard let data = try await appState.dependencies.meccas.worldMap(for: target.id) else {
                 mapLoad = .gpsFallback
+                await faceTask
                 return
             }
             mapLoad = .ready(try ARWorldMapArchiver.decode(data))
         } catch {
             mapLoad = .gpsFallback
         }
+        await faceTask
+    }
+
+    private func loadFacePhoto() async {
+        guard target.hasFacePhoto else { return }
+        guard let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
+              let image = UIImage(data: data)
+        else { return }
+        facePhoto = image
     }
 
     private var topBar: some View {
@@ -178,10 +220,19 @@ struct HuntARView: View {
         if case .loading = mapLoad {
             return "Loading precise AR map…"
         }
-        if isPreciseMode {
-            return preciseState == .located
+        if isGeoMode {
+            return geoState == .located
                 ? "Locked on — tap the Mecca!"
-                : "Scan the area to lock on"
+                : "Look around outdoors to lock geo tracking"
+        }
+        if isPreciseMode {
+            if preciseState == .located {
+                return "Locked on — tap the Mecca!"
+            }
+            if let distance = liveDistance, distance > HuntTuning.hintUntilMeters {
+                return "Walk \(Int(distance.rounded())) m \(compassDirection), then scan"
+            }
+            return "Scan the area to lock on"
         }
         guard let distance = liveDistance else {
             return "Finding your location…"
@@ -193,10 +244,19 @@ struct HuntARView: View {
     }
 
     private var subHintText: String {
+        if isGeoMode {
+            return geoState == .located
+                ? "Pinned with outdoor geo tracking."
+                : "Stay outside with a clear view of the street — Apple geo tracking will lock on."
+        }
         if isPreciseMode {
-            return preciseState == .located
-                ? "This Mecca is pinned to its exact real-world spot."
-                : "Slowly pan your phone across the area where it was hidden until it locks on (centimeter-accurate)."
+            if preciseState == .located {
+                return "This Mecca is pinned to its exact real-world spot."
+            }
+            if let distance = liveDistance, distance > HuntTuning.hintUntilMeters {
+                return "Head to where it was hidden, then slowly pan your phone across the area to lock on.\(accuracySuffix)"
+            }
+            return "Slowly pan your phone across the area where it was hidden until it locks on (centimeter-accurate)."
         }
         guard let distance = liveDistance else {
             return "Move outside for a better GPS fix."
@@ -210,6 +270,18 @@ struct HuntARView: View {
     private var accuracySuffix: String {
         guard let accuracy = location.horizontalAccuracy else { return "" }
         return " GPS ±\(Int(accuracy.rounded())) m."
+    }
+
+    /// Rough compass word for the direction to the target, for guiding the
+    /// hunter toward the mapped area during precise relocalization.
+    private var compassDirection: String {
+        guard let bearing = placement?.bearingDegrees else { return "toward it" }
+        let directions = [
+            "north", "northeast", "east", "southeast",
+            "south", "southwest", "west", "northwest"
+        ]
+        let index = Int((bearing / 45).rounded()) % directions.count
+        return directions[index]
     }
 
     private var successOverlay: some View {
@@ -282,6 +354,7 @@ private struct Crosshair: View {
 private struct HuntARContainer: UIViewRepresentable {
     let placement: HuntPlacement?
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
     @Binding var didTapMecca: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -309,6 +382,7 @@ private struct HuntARContainer: UIViewRepresentable {
                 distanceMeters: placement.distanceMeters,
                 freezeWithinMeters: HuntTuning.hintUntilMeters,
                 appearance: appearance,
+                facePhoto: facePhoto,
                 in: arView
             )
         }
@@ -350,10 +424,14 @@ private struct HuntARContainer: UIViewRepresentable {
 }
 
 /// Precise hunt container: relocalizes against the Mecca's stored world map and
-/// renders it at its exact physical spot. Tapping it claims it.
+/// renders it at its exact physical spot. While still scanning to lock on, a
+/// camera-relative GPS guide Mecca points the hunter toward the right area.
 private struct HuntPreciseARContainer: UIViewRepresentable {
     let worldMap: ARWorldMap
     let appearance: MeccaAppearance
+    let facePhoto: UIImage?
+    let placement: HuntPlacement?
+    let deviceHeadingDegrees: Double?
     @Binding var didTapMecca: Bool
     @Binding var state: PreciseMeccaARController.State
 
@@ -372,10 +450,14 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
 
         context.coordinator.controller.onStateChange = { newState in
             context.coordinator.parent.state = newState
+            if newState == .located {
+                context.coordinator.guide.clear()
+            }
         }
         context.coordinator.controller.start(
             worldMap: worldMap,
             appearance: appearance,
+            facePhoto: facePhoto,
             in: arView
         )
         return arView
@@ -383,6 +465,22 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
+        guard
+            context.coordinator.parent.state != .located,
+            let placement,
+            let heading = deviceHeadingDegrees,
+            heading >= 0
+        else { return }
+
+        context.coordinator.guide.updateCameraRelative(
+            targetBearingDegrees: placement.bearingDegrees,
+            deviceHeadingDegrees: heading,
+            distanceMeters: placement.distanceMeters,
+            freezeWithinMeters: HuntTuning.hintUntilMeters,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
     }
 
     static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
@@ -394,8 +492,98 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
         var parent: HuntPreciseARContainer
         weak var arView: ARView?
         let controller = PreciseMeccaARController()
+        let guide = ARMeccaPlacer()
 
         init(_ parent: HuntPreciseARContainer) {
+            self.parent = parent
+        }
+
+        @objc
+        func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let arView else { return }
+            let point = recognizer.location(in: arView)
+            guard let tapped = arView.entity(at: point) else { return }
+            // Only the precise (baked) Mecca counts as a claim — the GPS guide
+            // is just directional help while scanning.
+            if controller.contains(tapped) {
+                parent.didTapMecca = true
+            }
+        }
+    }
+}
+
+/// Outdoor hunt container using Apple geo tracking + an ARGeoAnchor.
+private struct HuntGeoARContainer: UIViewRepresentable {
+    let coordinate: CLLocationCoordinate2D
+    let altitude: Double?
+    let appearance: MeccaAppearance
+    let facePhoto: UIImage?
+    let placement: HuntPlacement?
+    let deviceHeadingDegrees: Double?
+    @Binding var didTapMecca: Bool
+    @Binding var state: GeoMeccaARController.State
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero)
+        arView.automaticallyConfigureSession = false
+        context.coordinator.arView = arView
+
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        arView.addGestureRecognizer(tap)
+
+        context.coordinator.controller.onStateChange = { newState in
+            context.coordinator.parent.state = newState
+            if newState == .located {
+                context.coordinator.guide.clear()
+            }
+        }
+        context.coordinator.controller.start(
+            coordinate: coordinate,
+            altitude: altitude,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
+        return arView
+    }
+
+    func updateUIView(_ arView: ARView, context: Context) {
+        context.coordinator.parent = self
+        guard
+            context.coordinator.parent.state != .located,
+            let placement,
+            let heading = deviceHeadingDegrees,
+            heading >= 0
+        else { return }
+
+        context.coordinator.guide.updateCameraRelative(
+            targetBearingDegrees: placement.bearingDegrees,
+            deviceHeadingDegrees: heading,
+            distanceMeters: placement.distanceMeters,
+            freezeWithinMeters: HuntTuning.hintUntilMeters,
+            appearance: appearance,
+            facePhoto: facePhoto,
+            in: arView
+        )
+    }
+
+    static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
+        arView.session.pause()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: HuntGeoARContainer
+        weak var arView: ARView?
+        let controller = GeoMeccaARController()
+        let guide = ARMeccaPlacer()
+
+        init(_ parent: HuntGeoARContainer) {
             self.parent = parent
         }
 

@@ -46,6 +46,10 @@ struct Mecca: Identifiable, Codable, Hashable, Sendable {
     /// Whether a centimeter-accurate ARKit world map is stored for this Mecca,
     /// enabling precise visual relocalization instead of GPS-only guidance.
     let hasWorldMap: Bool
+    /// Whether an owner face photo is stored for this Mecca.
+    let hasFacePhoto: Bool
+    /// How this Mecca was anchored: outdoor geo tracking or an AR world map.
+    let placementMode: MeccaPlacementMode
 
     var latitude: Double { coordinate.latitude }
     var longitude: Double { coordinate.longitude }

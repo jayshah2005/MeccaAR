@@ -64,6 +64,7 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
         name: String,
         coordinate: GeoCoordinate,
         appearance: MeccaAppearance,
+        placementMode: MeccaPlacementMode,
         notBefore: Date
     ) async throws -> Mecca { throw failure }
 
@@ -85,4 +86,8 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
     func uploadWorldMap(meccaID: UUID, compressedData: Data) async throws { throw failure }
 
     func worldMap(for meccaID: UUID) async throws -> Data? { throw failure }
+
+    func uploadFacePhoto(meccaID: UUID, jpegData: Data) async throws { throw failure }
+
+    func facePhoto(for meccaID: UUID) async throws -> Data? { throw failure }
 }

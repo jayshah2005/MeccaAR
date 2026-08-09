@@ -14,6 +14,7 @@ protocol MeccaRepository: Sendable {
         name: String,
         coordinate: GeoCoordinate,
         appearance: MeccaAppearance,
+        placementMode: MeccaPlacementMode,
         notBefore: Date
     ) async throws -> Mecca
 
@@ -46,6 +47,13 @@ protocol MeccaRepository: Sendable {
 
     /// Fetch the stored compressed world map for a Mecca, or nil if none exists.
     func worldMap(for meccaID: UUID) async throws -> Data?
+
+    /// Store a JPEG face photo for this Mecca so hunters see the same face.
+    /// Overwrites any existing photo.
+    func uploadFacePhoto(meccaID: UUID, jpegData: Data) async throws
+
+    /// Fetch the stored face photo JPEG for a Mecca, or nil if none exists.
+    func facePhoto(for meccaID: UUID) async throws -> Data?
 }
 
 enum MeccaRepositoryError: LocalizedError {

@@ -25,6 +25,13 @@ struct PlacementView: View {
     @State private var mappingQuality: ARFrame.WorldMappingStatus = .notAvailable
     @State private var canPlace = false
     @State private var placeToken = 0
+    @State private var scanCoverageDegrees = 0.0
+    @State private var scannedSectors: Set<Int> = []
+    @State private var placementStartedAt: Date?
+    @State private var placementEnvironment: PlacementEnvironment = .indoorOrWorldMap(
+        hasLiDAR: PlacementEnvironment.deviceHasLiDAR
+    )
+    @State private var geoLocalized = false
     @State private var facePhoto: UIImage?
     @State private var facePhotoRevision = 0
     @State private var isFaceCameraPresented = false
@@ -64,12 +71,25 @@ struct PlacementView: View {
                 session: arSession,
                 canPlace: $canPlace,
                 placeToken: placeToken,
+                scanCoverageDegrees: $scanCoverageDegrees,
+                scannedSectors: $scannedSectors,
+                placementStartedAt: $placementStartedAt,
+                usesGeoTracking: placementEnvironment.placementMode == .geo,
+                showSceneMesh: placementEnvironment.usesLiDAR,
+                geoLocalized: $geoLocalized,
                 facePhoto: facePhoto,
                 isFaceCameraActive: isFaceCameraPresented
             )
             .ignoresSafeArea()
 
             Crosshair(active: canPlace)
+
+            if placementCount > 0, placementEnvironment.placementMode == .worldMap {
+                ScanCoverageRing(filledSectors: scannedSectors)
+                    .frame(width: 72, height: 72)
+                    .allowsHitTesting(false)
+                    .padding(.top, 96)
+            }
 
             VStack(spacing: 16) {
                 HStack {
@@ -87,7 +107,14 @@ struct PlacementView: View {
 
                     Spacer()
 
-                    Label("PLACE MODE", systemImage: "arkit")
+                    Label(
+                        placementEnvironment.placementMode == .geo
+                            ? "OUTDOOR GEO"
+                            : "PLACE MODE",
+                        systemImage: placementEnvironment.placementMode == .geo
+                            ? "location.north.circle.fill"
+                            : "arkit"
+                    )
                         .font(.caption.weight(.bold))
                         .tracking(1.4)
                         .padding(.horizontal, 14)
@@ -158,6 +185,9 @@ struct PlacementView: View {
                                 Button("Clear", systemImage: "trash") {
                                     resetToken += 1
                                     placementCount = 0
+                                    scanCoverageDegrees = 0
+                                    scannedSectors = []
+                                    placementStartedAt = nil
                                     message = "Cleared — tap a surface to place another Mecca"
                                 }
                                 .font(.caption.weight(.semibold))
@@ -212,13 +242,23 @@ struct PlacementView: View {
         .task {
             location.start()
             await checkDailyLimit()
+            placementEnvironment = await PlacementEnvironment.resolve(
+                location: location.currentLocation
+            )
+        }
+        .task(id: location.currentLocation?.timestamp) {
+            // Re-check when GPS settles, but don't flip modes after a Mecca is placed.
+            guard placementCount == 0 else { return }
+            placementEnvironment = await PlacementEnvironment.resolve(
+                location: location.currentLocation
+            )
         }
         .task {
-            // Poll ARKit's world-mapping status so we can tell the user when the
-            // captured area is rich enough for precise relocalization.
+            // Poll ARKit's world-mapping / geo status so we can unlock save.
             while !Task.isCancelled {
                 mappingQuality = arSession.currentMappingStatus()
-                try? await Task.sleep(nanoseconds: 600_000_000)
+                geoLocalized = arSession.isGeoLocalized
+                try? await Task.sleep(nanoseconds: 400_000_000)
             }
         }
         .sheet(isPresented: $isFaceCameraPresented) {
@@ -261,28 +301,113 @@ struct PlacementView: View {
                 : "Move your phone to scan a surface before placing")
     }
 
+    /// Hard cap so placement never asks for more than a minute of scanning.
+    private static let maxPlacementSeconds: TimeInterval = 60
+    /// Orbit sectors (heat map). Filling enough of these unlocks save indoors.
+    private static let sectorCount = 8
+
+    private var placementElapsed: TimeInterval {
+        guard let placementStartedAt else { return 0 }
+        return Date().timeIntervalSince(placementStartedAt)
+    }
+
+    private var placementTimedOut: Bool {
+        placementCount > 0 && placementElapsed >= Self.maxPlacementSeconds
+    }
+
+    /// LiDAR rooms need less orbit; outdoor world-map is medium; plain indoor is most.
+    private var requiredSectors: Int {
+        if placementEnvironment.usesLiDAR { return 3 }
+        return 4
+    }
+
+    private var requiredOrbitDegrees: Double {
+        if placementEnvironment.usesLiDAR { return 70 }
+        return 100
+    }
+
+    /// Save unlocks once the spot is captured well enough — or at 60s with a
+    /// usable partial map so placement never stalls.
+    private var canSave: Bool {
+        guard
+            !isSaving,
+            !alreadyPlacedToday,
+            placementCount > 0,
+            location.currentLocation != nil
+        else { return false }
+
+        switch placementEnvironment.placementMode {
+        case .geo:
+            return geoLocalized || placementTimedOut
+        case .worldMap:
+            let coverageReady =
+                scannedSectors.count >= requiredSectors
+                || scanCoverageDegrees >= requiredOrbitDegrees
+            if mappingQuality == .mapped, coverageReady { return true }
+            if mappingQuality == .mapped, placementEnvironment.usesLiDAR,
+               scannedSectors.count >= 2 {
+                return true
+            }
+            // Time budget: accept a partial but usable map rather than blocking forever.
+            if placementTimedOut,
+               mappingQuality == .mapped || mappingQuality == .extending {
+                return true
+            }
+            return false
+        }
+    }
+
     @ViewBuilder
     private var saveSection: some View {
         if alreadyPlacedToday {
             dailyLimitNote
         } else {
             VStack(spacing: 10) {
-                Label(
-                    "Keep your phone close to the Mecca and slowly scan around it from a few angles, then hold still and save — this records its exact spot so hunters can find it.",
-                    systemImage: "dot.viewfinder"
-                )
+                Label(saveInstructionText, systemImage: "dot.viewfinder")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                mappingQualityLabel
+                if placementEnvironment.placementMode == .worldMap {
+                    mappingQualityLabel
+                    if placementCount > 0 {
+                        Text(timerLabel)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(placementTimedOut ? .mint : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    Label(
+                        geoLocalized
+                            ? "Outdoor geo lock ready — you can save"
+                            : "Look around outdoors until geo tracking locks on",
+                        systemImage: geoLocalized
+                            ? "checkmark.circle.fill"
+                            : "location.north.line"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(geoLocalized ? .mint : .yellow)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if !canSave, !isSaving {
+                    Label(saveBlockedReason, systemImage: "exclamationmark.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 if let saveError {
                     Label(saveError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Button(action: save) {
@@ -295,22 +420,80 @@ struct PlacementView: View {
                     .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.mint)
-                .disabled(isSaving || location.currentLocation == nil)
+                .tint(canSave ? .mint : .gray)
+                .disabled(!canSave)
+                .opacity(canSave ? 1 : 0.55)
             }
+        }
+    }
+
+    private var saveInstructionText: String {
+        switch placementEnvironment.placementMode {
+        case .geo:
+            return "Outdoors: Apple geo tracking will pin this Mecca to GPS. Place it, wait for the lock, then save — usually under a minute."
+        case .worldMap:
+            if placementEnvironment.usesLiDAR {
+                return "LiDAR is scanning the room. Turn so the ring fills a few sectors, then save. Caps at 60 seconds."
+            }
+            return "Walk around the Mecca so the ring fills, then save. Caps at 60 seconds so this never takes forever."
+        }
+    }
+
+    private var timerLabel: String {
+        let remaining = max(0, Int(Self.maxPlacementSeconds - placementElapsed))
+        if placementTimedOut {
+            return "Time budget reached — save with the best map captured."
+        }
+        return "Scan time left: \(remaining)s"
+    }
+
+    private var saveBlockedReason: String {
+        if location.currentLocation == nil {
+            return "Waiting for GPS — step near a window or outdoors before saving."
+        }
+        if placementEnvironment.placementMode == .geo {
+            return "Keep looking around outside until geo tracking locks (or wait up to 60s)."
+        }
+        let sectorsLeft = max(0, requiredSectors - scannedSectors.count)
+        if sectorsLeft > 0, mappingQuality != .mapped {
+            return "Turn slowly to fill the scan ring (\(sectorsLeft) sectors left) and build the AR map."
+        }
+        if sectorsLeft > 0 {
+            return "Turn a bit more to fill the scan ring (\(sectorsLeft) sectors left)."
+        }
+        switch mappingQuality {
+        case .mapped:
+            return "Ready to save."
+        case .extending:
+            return "Almost ready — a bit more scanning helps (auto-unlocks at 60s)."
+        default:
+            return "Scan the area around the Mecca until the AR map is ready."
         }
     }
 
     @ViewBuilder
     private var mappingQualityLabel: some View {
-        let (text, symbol, tint): (String, String, Color) = switch mappingQuality {
-        case .mapped:
-            ("AR map ready — precise find enabled", "checkmark.circle.fill", .mint)
-        case .extending:
-            ("Good AR coverage — a bit more helps", "circle.lefthalf.filled", .yellow)
-        default:
-            ("Look around the Mecca to build the AR map", "arkit", .orange)
-        }
+        let coverageReady =
+            scannedSectors.count >= requiredSectors
+            || scanCoverageDegrees >= requiredOrbitDegrees
+        let (text, symbol, tint): (String, String, Color) = {
+            if mappingQuality == .mapped, coverageReady {
+                return ("AR map ready — you can save", "checkmark.circle.fill", .mint)
+            }
+            if !coverageReady {
+                return (
+                    "Scan ring \(scannedSectors.count)/\(requiredSectors) sectors",
+                    "circle.dotted",
+                    .yellow
+                )
+            }
+            switch mappingQuality {
+            case .extending:
+                return ("Almost ready — keep scanning", "circle.lefthalf.filled", .yellow)
+            default:
+                return ("Building AR map…", "arkit", .orange)
+            }
+        }()
         Label(text, systemImage: symbol)
             .font(.caption.weight(.semibold))
             .foregroundStyle(tint)
@@ -342,7 +525,9 @@ struct PlacementView: View {
                     .font(.largeTitle.bold())
                 Text(didSaveWithMap
                     ? "Saved with a precise AR map — hunters can lock onto its exact spot."
-                    : "Saved with GPS only. Look around next time to enable centimeter-accurate finding.")
+                    : placementEnvironment.placementMode == .geo
+                        ? "Saved with outdoor geo tracking — hunters can lock on outside."
+                        : "Saved successfully.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -382,11 +567,19 @@ struct PlacementView: View {
     }
 
     private func save() {
-        guard !isSaving, !alreadyPlacedToday, let owner = appState.currentUser else { return }
+        guard canSave, let owner = appState.currentUser else { return }
+
+        let mode = placementEnvironment.placementMode
+        if mode == .worldMap {
+            let mapReady = mappingQuality == .mapped
+                || (placementTimedOut && mappingQuality == .extending)
+            guard mapReady else {
+                saveError = "Keep scanning until the AR map is ready, then try again."
+                return
+            }
+        }
 
         let name = "\(owner.username)'s Mecca"
-        // Exempt users pass a future cutoff so the "already placed since" guard
-        // never matches, allowing unlimited placements.
         let notBefore = isDailyLimitExempt
             ? Date.distantFuture
             : Calendar.current.startOfDay(for: Date())
@@ -395,49 +588,21 @@ struct PlacementView: View {
         isSaving = true
         didSaveWithMap = false
         Task {
-            // Capture the AR world map first, while the user is still holding the
-            // phone at the Mecca. This is what enables centimeter-accurate finding.
-            saveStatus = "Capturing AR map — hold still…"
-            let worldMapData = await arSession.captureWorldMap()
-
-            // Sample GPS for a few seconds too, as a coarse gate so hunters know
-            // when they're close enough to start scanning.
-            saveStatus = "Locking GPS — hold still…"
-            guard let fix = await location.captureBestLocation(seconds: 4) else {
-                saveError = "Couldn't get a GPS fix. Try again near a window or outdoors."
-                isSaving = false
-                return
-            }
-            let altitude = fix.verticalAccuracy >= 0 ? fix.altitude : nil
-            let coordinate = GeoCoordinate(
-                latitude: fix.coordinate.latitude,
-                longitude: fix.coordinate.longitude,
-                altitude: altitude
-            )
             do {
-                saveStatus = "Saving…"
-                let mecca = try await appState.dependencies.meccas.createMecca(
-                    ownerID: owner.id,
-                    name: name,
-                    coordinate: coordinate,
-                    appearance: appearance,
-                    notBefore: notBefore
-                )
-                if let worldMapData {
-                    saveStatus = "Uploading AR map…"
-                    do {
-                        try await appState.dependencies.meccas.uploadWorldMap(
-                            meccaID: mecca.id,
-                            compressedData: worldMapData
-                        )
-                        didSaveWithMap = true
-                    } catch {
-                        // The Mecca is saved with GPS; precise map upload is a
-                        // best-effort bonus, so don't fail the whole save.
-                        didSaveWithMap = false
-                    }
+                switch mode {
+                case .geo:
+                    try await saveWithGeo(
+                        owner: owner,
+                        name: name,
+                        notBefore: notBefore
+                    )
+                case .worldMap:
+                    try await saveWithWorldMap(
+                        owner: owner,
+                        name: name,
+                        notBefore: notBefore
+                    )
                 }
-                didSave = true
             } catch MeccaRepositoryError.dailyLimitReached {
                 alreadyPlacedToday = true
                 saveError = MeccaRepositoryError.dailyLimitReached.errorDescription
@@ -448,10 +613,107 @@ struct PlacementView: View {
             isSaving = false
         }
     }
+
+    private func saveWithGeo(
+        owner: User,
+        name: String,
+        notBefore: Date
+    ) async throws {
+        saveStatus = "Locking outdoor location…"
+        let coordinate: GeoCoordinate
+        if let geo = await arSession.captureGeoCoordinate() {
+            coordinate = geo
+        } else if let fix = await location.captureBestLocation(seconds: 3) {
+            coordinate = GeoCoordinate(
+                latitude: fix.coordinate.latitude,
+                longitude: fix.coordinate.longitude,
+                altitude: fix.verticalAccuracy >= 0 ? fix.altitude : nil
+            )
+        } else {
+            saveError = "Couldn't lock an outdoor location. Stay outside with a clear sky view and try again."
+            return
+        }
+
+        saveStatus = "Saving…"
+        let mecca = try await appState.dependencies.meccas.createMecca(
+            ownerID: owner.id,
+            name: name,
+            coordinate: coordinate,
+            appearance: appearance,
+            placementMode: .geo,
+            notBefore: notBefore
+        )
+        await uploadFacePhotoIfNeeded(meccaID: mecca.id)
+        didSaveWithMap = false
+        didSave = true
+    }
+
+    private func saveWithWorldMap(
+        owner: User,
+        name: String,
+        notBefore: Date
+    ) async throws {
+        saveStatus = "Capturing AR map — hold still…"
+        let minimumPoints = placementTimedOut ? 40 : ARWorldMapArchiver.minimumFeaturePoints
+        switch await arSession.captureWorldMap(minimumFeaturePoints: minimumPoints) {
+        case .failure(let failure):
+            saveError = failure.errorDescription
+            return
+        case .success(let worldMapData):
+            saveStatus = "Locking GPS — hold still…"
+            guard let fix = await location.captureBestLocation(seconds: 3) else {
+                saveError = "Couldn't get a GPS fix. Try again near a window or outdoors."
+                return
+            }
+            let coordinate = GeoCoordinate(
+                latitude: fix.coordinate.latitude,
+                longitude: fix.coordinate.longitude,
+                altitude: fix.verticalAccuracy >= 0 ? fix.altitude : nil
+            )
+            saveStatus = "Saving…"
+            let mecca = try await appState.dependencies.meccas.createMecca(
+                ownerID: owner.id,
+                name: name,
+                coordinate: coordinate,
+                appearance: appearance,
+                placementMode: .worldMap,
+                notBefore: notBefore
+            )
+            saveStatus = "Uploading AR map…"
+            do {
+                try await appState.dependencies.meccas.uploadWorldMap(
+                    meccaID: mecca.id,
+                    compressedData: worldMapData
+                )
+                await uploadFacePhotoIfNeeded(meccaID: mecca.id)
+                didSaveWithMap = true
+                didSave = true
+            } catch {
+                try? await appState.dependencies.meccas.deleteMecca(
+                    id: mecca.id,
+                    ownerID: owner.id
+                )
+                saveError = "Couldn't upload the AR map. Check your connection and try saving again."
+            }
+        }
+    }
+
+    private func uploadFacePhotoIfNeeded(meccaID: UUID) async {
+        guard let jpeg = facePhoto?.jpegData(compressionQuality: 0.72) else { return }
+        do {
+            try await appState.dependencies.meccas.uploadFacePhoto(
+                meccaID: meccaID,
+                jpegData: jpeg
+            )
+        } catch {
+            // Appearance still saved; face is best-effort so a photo upload
+            // glitch doesn't block hiding the Mecca.
+        }
+    }
 }
 
 /// Shared handle to the placement AR session so `PlacementView` can capture the
-/// world map and read mapping quality without owning the `ARView` directly.
+/// world map / geo location and read mapping quality without owning the `ARView`.
 @MainActor
 final class PlacementARSession {
     weak var arView: ARView?
@@ -460,17 +722,86 @@ final class PlacementARSession {
         arView?.session.currentFrame?.worldMappingStatus ?? .notAvailable
     }
 
-    /// Asks ARKit for the current world map and returns it archived + compressed,
-    /// or nil if a usable map isn't available yet.
-    func captureWorldMap() async -> Data? {
-        guard let session = arView?.session else { return nil }
+    var isGeoLocalized: Bool {
+        arView?.session.currentFrame?.geoTrackingStatus?.state == .localized
+    }
+
+    /// Best-effort geo coordinate for the currently placed Mecca anchor.
+    func captureGeoCoordinate() async -> GeoCoordinate? {
+        guard
+            let session = arView?.session,
+            let anchor = session.currentFrame?.anchors.first(where: {
+                $0.name == PreciseMeccaARController.anchorName
+            })
+        else { return nil }
+
+        let point = SIMD3<Float>(
+            anchor.transform.columns.3.x,
+            anchor.transform.columns.3.y,
+            anchor.transform.columns.3.z
+        )
         return await withCheckedContinuation { continuation in
-            session.getCurrentWorldMap { map, _ in
-                guard let map else {
+            session.getGeoLocation(forPoint: point) { coordinate, altitude, error in
+                guard error == nil else {
                     continuation.resume(returning: nil)
                     return
                 }
-                continuation.resume(returning: try? ARWorldMapArchiver.encode(map))
+                continuation.resume(
+                    returning: GeoCoordinate(
+                        latitude: coordinate.latitude,
+                        longitude: coordinate.longitude,
+                        altitude: altitude
+                    )
+                )
+            }
+        }
+    }
+
+    /// Asks ARKit for the current world map and returns it archived + compressed.
+    /// Fails with a user-facing reason when the map is missing or too sparse.
+    func captureWorldMap(
+        minimumFeaturePoints: Int = ARWorldMapArchiver.minimumFeaturePoints
+    ) async -> Result<Data, CaptureFailure> {
+        guard let session = arView?.session else {
+            return .failure(.message(
+                "AR session isn't ready yet. Keep the camera on the Mecca and try again."
+            ))
+        }
+        return await withCheckedContinuation { continuation in
+            session.getCurrentWorldMap { map, error in
+                guard let map else {
+                    let message = error?.localizedDescription
+                        ?? "Couldn't capture the AR map. Keep scanning from more angles, hold still, and try again."
+                    continuation.resume(returning: .failure(.message(message)))
+                    return
+                }
+                do {
+                    continuation.resume(
+                        returning: .success(
+                            try ARWorldMapArchiver.encode(
+                                map,
+                                minimumFeaturePoints: minimumFeaturePoints
+                            )
+                        )
+                    )
+                } catch {
+                    continuation.resume(
+                        returning: .failure(.message(
+                            (error as? LocalizedError)?.errorDescription
+                                ?? error.localizedDescription
+                        ))
+                    )
+                }
+            }
+        }
+    }
+
+    enum CaptureFailure: LocalizedError {
+        case message(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .message(let text): return text
             }
         }
     }
@@ -621,7 +952,7 @@ private struct FacePhotoControl: View {
 
             Text(
                 cameraAvailable
-                    ? "The face photo stays in this AR session."
+                    ? "Saved with the Mecca — hunters will see this face."
                     : "A physical iPhone camera is required for a face photo."
             )
             .font(.caption2)
@@ -701,6 +1032,35 @@ private struct Crosshair: View {
     }
 }
 
+private struct ScanCoverageRing: View {
+    let filledSectors: Set<Int>
+    private let sectorCount = 8
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<sectorCount, id: \.self) { index in
+                Circle()
+                    .trim(
+                        from: CGFloat(index) / CGFloat(sectorCount),
+                        to: CGFloat(index + 1) / CGFloat(sectorCount) - 0.012
+                    )
+                    .stroke(
+                        filledSectors.contains(index)
+                            ? Color.mint.opacity(0.95)
+                            : Color.white.opacity(0.22),
+                        style: StrokeStyle(lineWidth: 8, lineCap: .butt)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
+            Text("\(filledSectors.count)/\(sectorCount)")
+                .font(.caption2.weight(.bold).monospacedDigit())
+                .foregroundStyle(.white)
+        }
+        .shadow(color: .black.opacity(0.6), radius: 4)
+        .accessibilityLabel("Scan coverage \(filledSectors.count) of \(sectorCount) sectors")
+    }
+}
+
 private struct PlacementARView: UIViewRepresentable {
     @Binding var placementCount: Int
     let resetToken: Int
@@ -709,6 +1069,12 @@ private struct PlacementARView: UIViewRepresentable {
     let session: PlacementARSession
     @Binding var canPlace: Bool
     let placeToken: Int
+    @Binding var scanCoverageDegrees: Double
+    @Binding var scannedSectors: Set<Int>
+    @Binding var placementStartedAt: Date?
+    let usesGeoTracking: Bool
+    let showSceneMesh: Bool
+    @Binding var geoLocalized: Bool
     let facePhoto: UIImage?
     let isFaceCameraActive: Bool
 
@@ -730,10 +1096,11 @@ private struct PlacementARView: UIViewRepresentable {
 
         let coaching = ARCoachingOverlayView()
         coaching.session = arView.session
-        coaching.goal = .anyPlane
+        coaching.goal = usesGeoTracking ? .geoTracking : .anyPlane
         coaching.activatesAutomatically = true
         coaching.translatesAutoresizingMaskIntoConstraints = false
         arView.addSubview(coaching)
+        context.coordinator.coachingOverlay = coaching
         NSLayoutConstraint.activate([
             coaching.leadingAnchor.constraint(equalTo: arView.leadingAnchor),
             coaching.trailingAnchor.constraint(equalTo: arView.trailingAnchor),
@@ -749,6 +1116,7 @@ private struct PlacementARView: UIViewRepresentable {
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.setFaceCameraActive(isFaceCameraActive)
+        context.coordinator.applyTrackingModeIfNeeded()
         context.coordinator.clearIfNeeded(resetToken: resetToken)
         context.coordinator.applyConfigurationToLatestMecca()
         context.coordinator.handlePlaceToken(placeToken)
@@ -789,6 +1157,11 @@ private struct PlacementARView: UIViewRepresentable {
         private var lastReportedCanPlace = false
         private var lastPlaceToken = 0
         private var faceCameraIsActive = false
+        /// Last camera yaw (degrees) used to accumulate orbit coverage.
+        private var lastYawDegrees: Double?
+        private var accumulatedScanDegrees: Double = 0
+        private var lastUsesGeoTracking: Bool?
+        weak var coachingOverlay: ARCoachingOverlayView?
 
         init(_ parent: PlacementARView) {
             self.parent = parent
@@ -800,23 +1173,50 @@ private struct PlacementARView: UIViewRepresentable {
             runSession(resetTracking: true)
         }
 
+        func applyTrackingModeIfNeeded() {
+            guard lastUsesGeoTracking != parent.usesGeoTracking else { return }
+            // Don't tear down tracking after a Mecca is already placed.
+            guard parent.placementCount == 0 else { return }
+            runSession(resetTracking: true)
+        }
+
         private func runSession(resetTracking: Bool) {
             guard let arView else { return }
-
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.planeDetection = [.horizontal, .vertical]
-            configuration.environmentTexturing = .automatic
-            // LiDAR devices get a full scene mesh, which makes surface detection
-            // (and therefore placement) far more reliable, even on low-texture
-            // walls and floors.
-            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
-                configuration.sceneReconstruction = .mesh
-            }
+            lastUsesGeoTracking = parent.usesGeoTracking
+            coachingOverlay?.goal = parent.usesGeoTracking ? .geoTracking : .anyPlane
 
             let options: ARSession.RunOptions = resetTracking
                 ? [.resetTracking, .removeExistingAnchors]
                 : []
-            arView.session.run(configuration, options: options)
+
+            if parent.usesGeoTracking, ARGeoTrackingConfiguration.isSupported {
+                let configuration = ARGeoTrackingConfiguration()
+                configuration.planeDetection = [.horizontal, .vertical]
+                arView.session.run(configuration, options: options)
+                // Mesh overlay isn't used outdoors — geo imagery is the signal.
+                arView.environment.sceneUnderstanding.options = []
+            } else {
+                let configuration = ARWorldTrackingConfiguration()
+                configuration.planeDetection = [.horizontal, .vertical]
+                configuration.environmentTexturing = .automatic
+                if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+                    configuration.sceneReconstruction = .mesh
+                }
+                if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                    configuration.frameSemantics.insert(.sceneDepth)
+                }
+                arView.session.run(configuration, options: options)
+
+                // Soft LiDAR mesh cue indoors so the denser scan is visible without
+                // a full RoomPlan flow (which would blow the 60s budget).
+                if parent.showSceneMesh {
+                    arView.environment.sceneUnderstanding.options = [
+                        .occlusion, .receivesLighting, .collision
+                    ]
+                } else {
+                    arView.environment.sceneUnderstanding.options = []
+                }
+            }
         }
 
         func setFaceCameraActive(_ isActive: Bool) {
@@ -882,6 +1282,45 @@ private struct PlacementARView: UIViewRepresentable {
                 reticle.isEnabled = false
                 setCanPlace(false)
             }
+
+            updateScanCoverage()
+        }
+
+        /// Accumulates how far the camera has turned while a Mecca is placed.
+        /// Walking around the Mecca builds a denser multi-angle world map and
+        /// fills the sector heat ring.
+        private func updateScanCoverage() {
+            guard parent.placementCount > 0,
+                  let frame = arView?.session.currentFrame
+            else { return }
+
+            let forward = -SIMD3<Float>(
+                frame.camera.transform.columns.2.x,
+                0,
+                frame.camera.transform.columns.2.z
+            )
+            guard simd_length(forward) > 0.001 else { return }
+            let yaw = Double(atan2(forward.x, -forward.z)) * 180 / .pi
+
+            // 8 sectors around the compass for the heat-map ring.
+            let sector = Int(((yaw + 180) / 45).rounded(.down)) % 8
+            if !parent.scannedSectors.contains(sector) {
+                parent.scannedSectors.insert(sector)
+            }
+
+            if let last = lastYawDegrees {
+                var delta = yaw - last
+                while delta > 180 { delta -= 360 }
+                while delta < -180 { delta += 360 }
+                accumulatedScanDegrees = min(
+                    360,
+                    accumulatedScanDegrees + abs(delta)
+                )
+                if abs(parent.scanCoverageDegrees - accumulatedScanDegrees) >= 1 {
+                    parent.scanCoverageDegrees = accumulatedScanDegrees
+                }
+            }
+            lastYawDegrees = yaw
         }
 
         private func setCanPlace(_ value: Bool) {
@@ -955,6 +1394,11 @@ private struct PlacementARView: UIViewRepresentable {
             // placed preview before adding the new one.
             placedMeccas.forEach { $0.anchor.removeFromParent() }
             placedMeccas.removeAll()
+            lastYawDegrees = nil
+            accumulatedScanDegrees = 0
+            parent.scanCoverageDegrees = 0
+            parent.scannedSectors = []
+            parent.placementStartedAt = Date()
 
             // Keep the character upright in gravity-aligned world space even
             // when the surface is a wall. The surface normal is still used to
@@ -1017,6 +1461,11 @@ private struct PlacementARView: UIViewRepresentable {
             }
             lastResetToken = resetToken
             lastAppliedConfiguration = nil
+            lastYawDegrees = nil
+            accumulatedScanDegrees = 0
+            parent.scanCoverageDegrees = 0
+            parent.scannedSectors = []
+            parent.placementStartedAt = nil
         }
 
         func applyConfigurationToLatestMecca() {
