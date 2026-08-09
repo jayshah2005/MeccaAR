@@ -8,16 +8,17 @@ struct PlacementView: View {
     @State private var placementCount = 0
     @State private var resetToken = 0
     @State private var message = "Move slowly so the camera can find a surface"
-    @State private var sizeScale = 0.55
-    @State private var rotationDegrees = 0.0
-    @State private var pose = MeccaPose.standing
+    @State private var sizeScale = 0.5
+    @State private var xRotationDegrees = 0.0
+    @State private var yRotationDegrees = 0.0
     @State private var tintColor = Color.white
+    @State private var isToolbarMinimized = false
 
     private var configuration: MeccaPlacementConfiguration {
         MeccaPlacementConfiguration(
             sizeScale: Float(sizeScale),
-            rotationDegrees: Float(rotationDegrees),
-            pose: pose,
+            xRotationDegrees: Float(xRotationDegrees),
+            yRotationDegrees: Float(yRotationDegrees),
             tint: MeccaTint(color: tintColor)
         )
     }
@@ -61,45 +62,78 @@ struct PlacementView: View {
                 Spacer()
 
                 VStack(spacing: 10) {
-                    Text(message)
-                        .font(.subheadline.weight(.semibold))
-                        .multilineTextAlignment(.center)
-
-                    Text("Aim the reticle at a floor, table, wall, or other flat surface, then tap the camera view.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-
-                    HStack {
-                        Label("\(placementCount) placed", systemImage: "mappin.and.ellipse")
+                    HStack(spacing: 12) {
+                        if isToolbarMinimized {
+                            Label(
+                                "\(placementCount) placed",
+                                systemImage: "mappin.and.ellipse"
+                            )
                             .font(.caption.weight(.bold))
+                        } else {
+                            Text(message)
+                                .font(.subheadline.weight(.semibold))
+                                .multilineTextAlignment(.leading)
+                        }
 
                         Spacer()
 
-                        if placementCount > 0 {
-                            Button("Clear", systemImage: "trash") {
-                                resetToken += 1
-                                placementCount = 0
-                                message = "Cleared — tap a surface to place another Mecca"
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isToolbarMinimized.toggle()
                             }
-                            .font(.caption.weight(.semibold))
-                            .buttonStyle(.bordered)
+                        } label: {
+                            Image(
+                                systemName: isToolbarMinimized
+                                    ? "chevron.up"
+                                    : "chevron.down"
+                            )
+                            .frame(width: 32, height: 32)
                         }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel(
+                            isToolbarMinimized
+                                ? "Expand placement toolbar"
+                                : "Minimize placement toolbar"
+                        )
                     }
 
-                    Divider()
-
-                    MeccaPlacementControls(
-                        sizeScale: $sizeScale,
-                        rotationDegrees: $rotationDegrees,
-                        pose: $pose,
-                        tintColor: $tintColor
-                    )
-
-                    if placementCount > 0 {
-                        Text("Controls are editing the most recently placed Mecca.")
-                            .font(.caption2)
+                    if !isToolbarMinimized {
+                        Text("Aim the reticle at a floor, table, wall, or other flat surface, then tap the camera view.")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        HStack {
+                            Label("\(placementCount) placed", systemImage: "mappin.and.ellipse")
+                                .font(.caption.weight(.bold))
+
+                            Spacer()
+
+                            if placementCount > 0 {
+                                Button("Clear", systemImage: "trash") {
+                                    resetToken += 1
+                                    placementCount = 0
+                                    message = "Cleared — tap a surface to place another Mecca"
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.bordered)
+                            }
+                        }
+
+                        Divider()
+
+                        MeccaPlacementControls(
+                            sizeScale: $sizeScale,
+                            xRotationDegrees: $xRotationDegrees,
+                            yRotationDegrees: $yRotationDegrees,
+                            tintColor: $tintColor
+                        )
+
+                        if placementCount > 0 {
+                            Text("Controls are editing the most recently placed Mecca.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .padding()
@@ -111,17 +145,10 @@ struct PlacementView: View {
     }
 }
 
-private enum MeccaPose: String, CaseIterable, Identifiable {
-    case standing = "Stand"
-    case sleeping = "Sleep"
-
-    var id: Self { self }
-}
-
 private struct MeccaPlacementConfiguration: Equatable {
     let sizeScale: Float
-    let rotationDegrees: Float
-    let pose: MeccaPose
+    let xRotationDegrees: Float
+    let yRotationDegrees: Float
     let tint: MeccaTint
 }
 
@@ -167,23 +194,18 @@ private struct MeccaTint: Equatable {
 
 private struct MeccaPlacementControls: View {
     @Binding var sizeScale: Double
-    @Binding var rotationDegrees: Double
-    @Binding var pose: MeccaPose
+    @Binding var xRotationDegrees: Double
+    @Binding var yRotationDegrees: Double
     @Binding var tintColor: Color
 
-    private var approximateHeight: Int {
-        Int((36 * sizeScale).rounded())
+    private var approximateHeightMillimeters: Int {
+        let referenceHeightMillimeters =
+            Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
+        return Int((referenceHeightMillimeters * sizeScale).rounded())
     }
 
     var body: some View {
         VStack(spacing: 12) {
-            Picker("Pose", selection: $pose) {
-                ForEach(MeccaPose.allCases) { pose in
-                    Text(pose.rawValue).tag(pose)
-                }
-            }
-            .pickerStyle(.segmented)
-
             ColorPicker(
                 "Mecca color",
                 selection: $tintColor,
@@ -195,28 +217,79 @@ private struct MeccaPlacementControls: View {
                 Image(systemName: "person.fill")
                     .font(.caption2)
 
-                Slider(value: $sizeScale, in: 0.25...1.0, step: 0.05)
+                Slider(value: $sizeScale, in: 0.2...1.0, step: 0.1)
                     .accessibilityLabel("Mecca size")
-                    .accessibilityValue("Approximately \(approximateHeight) centimeters")
+                    .accessibilityValue(
+                        "Approximately \(approximateHeightMillimeters) millimeters"
+                    )
 
                 Image(systemName: "person.fill")
 
-                Text("~\(approximateHeight) cm")
+                Text("~\(approximateHeightMillimeters) mm")
                     .font(.caption.monospacedDigit())
                     .frame(width: 48, alignment: .trailing)
             }
-            HStack(spacing: 12) {
-                Image(systemName: "rotate.left")
+            AxisRotationControl(
+                axisName: "Y",
+                degrees: $yRotationDegrees
+            )
 
-                Slider(value: $rotationDegrees, in: 0...360, step: 15)
-                    .accessibilityLabel("Mecca rotation")
-                    .accessibilityValue("\(Int(rotationDegrees)) degrees")
+            AxisRotationControl(
+                axisName: "X",
+                degrees: $xRotationDegrees
+            )
+        }
+    }
+}
 
-                Text("\(Int(rotationDegrees))°")
+private struct AxisRotationControl: View {
+    let axisName: String
+    @Binding var degrees: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("\(axisName)-axis rotation")
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                Text("\(Int(degrees))°")
                     .font(.caption.monospacedDigit())
-                    .frame(width: 38, alignment: .trailing)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    rotate(by: -90)
+                } label: {
+                    Image(systemName: "rotate.left")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(
+                    "Rotate Mecca negative 90 degrees on \(axisName) axis"
+                )
+
+                Slider(value: $degrees, in: 0...360, step: 15)
+                    .accessibilityLabel("Mecca \(axisName)-axis rotation")
+                    .accessibilityValue("\(Int(degrees)) degrees")
+
+                Button {
+                    rotate(by: 90)
+                } label: {
+                    Image(systemName: "rotate.right")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(
+                    "Rotate Mecca positive 90 degrees on \(axisName) axis"
+                )
             }
         }
+    }
+
+    private func rotate(by adjustment: Double) {
+        let rotated = (degrees + adjustment)
+            .truncatingRemainder(dividingBy: 360)
+        degrees = rotated >= 0 ? rotated : rotated + 360
     }
 }
 
@@ -292,7 +365,6 @@ private struct PlacementARView: UIViewRepresentable {
         private struct PlacedMecca {
             let anchor: AnchorEntity
             let entity: Entity
-            let surfaceOrientation: simd_quatf
         }
 
         private var placedMeccas: [PlacedMecca] = []
@@ -350,7 +422,6 @@ private struct PlacementARView: UIViewRepresentable {
             anchorTransform.columns.3.z += normalizedNormal.z * 0.015
 
             let anchor = AnchorEntity(world: anchorTransform)
-            let surfaceOrientation = Self.orientation(from: result.worldTransform)
             let placementConfiguration = parent.configuration
             parent.message = "Loading Mecca…"
 
@@ -363,8 +434,7 @@ private struct PlacementARView: UIViewRepresentable {
 
                 let placedMecca = PlacedMecca(
                     anchor: anchor,
-                    entity: entity,
-                    surfaceOrientation: surfaceOrientation
+                    entity: entity
                 )
                 self.placedMeccas.append(placedMecca)
                 self.apply(placementConfiguration, to: placedMecca)
@@ -403,48 +473,11 @@ private struct PlacementARView: UIViewRepresentable {
                 to: placedMecca.entity
             )
 
-            let radians = configuration.rotationDegrees * .pi / 180
-            switch configuration.pose {
-            case .standing:
-                placedMecca.entity.orientation = simd_quatf(
-                    angle: radians,
-                    axis: [0, 1, 0]
-                )
-            case .sleeping:
-                let surfaceSpin = simd_quatf(
-                    angle: radians,
-                    axis: [0, 1, 0]
-                )
-                let lieFlat = simd_quatf(
-                    angle: .pi / 2,
-                    axis: [1, 0, 0]
-                )
-                placedMecca.entity.orientation =
-                    placedMecca.surfaceOrientation * surfaceSpin * lieFlat
-            }
-        }
-
-        private static func orientation(
-            from transform: simd_float4x4
-        ) -> simd_quatf {
-            let rotation = simd_float3x3(
-                SIMD3<Float>(
-                    transform.columns.0.x,
-                    transform.columns.0.y,
-                    transform.columns.0.z
-                ),
-                SIMD3<Float>(
-                    transform.columns.1.x,
-                    transform.columns.1.y,
-                    transform.columns.1.z
-                ),
-                SIMD3<Float>(
-                    transform.columns.2.x,
-                    transform.columns.2.y,
-                    transform.columns.2.z
-                )
-            )
-            return simd_quatf(rotation)
+            let xRadians = configuration.xRotationDegrees * .pi / 180
+            let yRadians = configuration.yRotationDegrees * .pi / 180
+            let xRotation = simd_quatf(angle: xRadians, axis: [1, 0, 0])
+            let yRotation = simd_quatf(angle: yRadians, axis: [0, 1, 0])
+            placedMecca.entity.orientation = yRotation * xRotation
         }
     }
 }

@@ -7,7 +7,7 @@ This branch contains the foundation plus the first local AR capability:
 - a cloneable SwiftUI iPhone project;
 - a camera placement screen with horizontal and vertical plane detection;
 - tap-to-place using the supplied Sketchfab USDZ, with a procedural fallback;
-- live color, size, 360-degree rotation, and standing/sleeping pose controls;
+- live color, size, and independent X/Y-axis rotation controls;
 - domain contracts for placement, discovery, and claiming;
 - product, technical, privacy, and delivery plans.
 

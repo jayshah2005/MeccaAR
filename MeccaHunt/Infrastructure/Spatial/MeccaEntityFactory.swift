@@ -4,8 +4,8 @@ import UIKit
 
 @MainActor
 enum MeccaEntityFactory {
-    /// The controls treat a scale of 1 as a 36 cm-tall character.
-    private static let referenceHeight: Float = 0.36
+    /// Scale 1 is a 30 mm character; the placement default of 0.5 is 15 mm.
+    static let referenceHeightMeters: Float = 0.03
     private static var cachedTemplate: Entity?
 
     static func make() async -> Entity {
@@ -49,8 +49,12 @@ enum MeccaEntityFactory {
         let bounds = imported.visualBounds(relativeTo: root)
         let height = bounds.extents.y
         if height > 0.0001 {
-            let normalizationScale = referenceHeight / height
-            imported.scale = SIMD3<Float>(repeating: normalizationScale)
+            let normalizationScale = referenceHeightMeters / height
+            // Preserve RealityKit's scale for the USD stage's centimeters and
+            // apply our normalization as a ratio. Replacing the imported scale
+            // drops that unit conversion and makes this asset about 100x larger.
+            imported.scale = imported.scale
+                * SIMD3<Float>(repeating: normalizationScale)
 
             let lowestPoint = bounds.center.y - (height / 2)
             imported.position = [
@@ -63,13 +67,13 @@ enum MeccaEntityFactory {
             // shape from this relatively dense prototype mesh.
             let collisionEntity = Entity()
             collisionEntity.name = "mecca-collision"
-            collisionEntity.position = [0, referenceHeight / 2, 0]
+            collisionEntity.position = [0, referenceHeightMeters / 2, 0]
             collisionEntity.components.set(
                 CollisionComponent(shapes: [
                     .generateBox(
                         size: [
                             max(bounds.extents.x * normalizationScale, 0.01),
-                            referenceHeight,
+                            referenceHeightMeters,
                             max(bounds.extents.z * normalizationScale, 0.01)
                         ]
                     )
@@ -84,6 +88,8 @@ enum MeccaEntityFactory {
     private static func makeProceduralFallback() -> Entity {
         let root = Entity()
         root.name = "mecca"
+        let content = Entity()
+        root.addChild(content)
 
         let white = SimpleMaterial(
             color: UIColor(white: 0.96, alpha: 1),
@@ -96,41 +102,44 @@ enum MeccaEntityFactory {
             materials: [white]
         )
         head.position = [0, 0.31, 0]
-        root.addChild(head)
+        content.addChild(head)
 
         addBox(
-            to: root,
+            to: content,
             size: [0.12, 0.16, 0.06],
             position: [0, 0.205, 0],
             material: white
         )
 
         addLimb(
-            to: root,
+            to: content,
             position: [-0.085, 0.205, 0],
             angle: 0.12,
             material: white
         )
         addLimb(
-            to: root,
+            to: content,
             position: [0.085, 0.205, 0],
             angle: -0.12,
             material: white
         )
 
         addBox(
-            to: root,
+            to: content,
             size: [0.045, 0.135, 0.05],
             position: [-0.033, 0.0675, 0],
             material: white
         )
         addBox(
-            to: root,
+            to: content,
             size: [0.045, 0.135, 0.05],
             position: [0.033, 0.0675, 0],
             material: white
         )
 
+        let originalHeight: Float = 0.365
+        let fallbackScale = referenceHeightMeters / originalHeight
+        content.scale = SIMD3<Float>(repeating: fallbackScale)
         root.generateCollisionShapes(recursive: true)
         return root
     }

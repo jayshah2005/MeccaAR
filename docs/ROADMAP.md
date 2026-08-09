@@ -17,7 +17,7 @@ Exit: the team agrees on MVP scope and can launch the setup shell in Xcode.
 
 - [x] Camera-based AR screen with coaching and horizontal/vertical plane detection.
 - [x] Tap-to-place using the supplied USDZ model.
-- [x] Live color, size, rotation, and upright/lying controls for the latest placement.
+- [x] Live color, size, and X/Y-axis rotation controls for the latest placement.
 - [ ] Camera/location permission education and denial states.
 - [x] Licensed USDZ loading, validation, bounds normalization, and fallback.
 - [ ] Polished placement preview.
