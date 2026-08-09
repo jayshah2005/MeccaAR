@@ -75,7 +75,7 @@ struct MeccaLocatorARView: View {
             .padding()
         }
         .preferredColorScheme(.dark)
-        .task { await MeccaEntityFactory.preload() }
+        .task { await MeccaEntityFactory.preload(pose: target.appearance.pose) }
         .task { await loadWorldMap() }
     }
 

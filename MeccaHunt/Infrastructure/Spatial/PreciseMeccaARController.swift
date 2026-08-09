@@ -190,7 +190,7 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let entity = await MeccaEntityFactory.make()
+            let entity = await MeccaEntityFactory.make(pose: self.appearance.pose)
             guard self.generation == requestedGeneration else { return }
             MeccaEntityFactory.apply(
                 self.appearance,

@@ -14,6 +14,7 @@ struct PlacementView: View {
     @State private var xRotationDegrees = 0.0
     @State private var yRotationDegrees = 0.0
     @State private var tintColor = Color.white
+    @State private var selectedPose = MeccaPose.classic
     @State private var isToolbarMinimized = false
     @State private var meccaName = ""
     @State private var isSaving = false
@@ -41,6 +42,7 @@ struct PlacementView: View {
             sizeScale: Float(sizeMillimeters / referenceMillimeters),
             xRotationDegrees: Float(xRotationDegrees),
             yRotationDegrees: Float(yRotationDegrees),
+            pose: selectedPose,
             facePhotoPlacement: facePhotoPlacement,
             facePhotoRevision: facePhotoRevision,
             tint: MeccaTint(color: tintColor)
@@ -57,7 +59,8 @@ struct PlacementView: View {
             yRotationDegrees: yRotationDegrees,
             red: tint.red,
             green: tint.green,
-            blue: tint.blue
+            blue: tint.blue,
+            pose: selectedPose
         )
     }
 
@@ -188,7 +191,9 @@ struct PlacementView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .task { await MeccaEntityFactory.preload() }
+        .task(id: selectedPose) {
+            await MeccaEntityFactory.preload(pose: selectedPose)
+        }
         .task {
             location.start()
             await checkDailyLimit()
@@ -226,6 +231,7 @@ struct PlacementView: View {
                 MeccaPhotoPlacementEditor(
                     image: editorImage,
                     tintColor: tintColor,
+                    pose: selectedPose,
                     initialPlacement: facePhotoPlacement
                 ) { placement in
                     facePhoto = editorImage
@@ -268,6 +274,7 @@ struct PlacementView: View {
                 xRotationDegrees: $xRotationDegrees,
                 yRotationDegrees: $yRotationDegrees,
                 tintColor: $tintColor,
+                pose: $selectedPose,
                 facePhoto: facePhoto,
                 cameraAvailable: UIImagePickerController
                     .isSourceTypeAvailable(.camera),
@@ -996,6 +1003,7 @@ private struct MeccaPlacementConfiguration: Equatable {
     let sizeScale: Float
     let xRotationDegrees: Float
     let yRotationDegrees: Float
+    let pose: MeccaPose
     let facePhotoPlacement: MeccaPhotoPlacement
     let facePhotoRevision: Int
     let tint: MeccaTint
@@ -1046,6 +1054,7 @@ private struct MeccaPlacementControls: View {
     @Binding var xRotationDegrees: Double
     @Binding var yRotationDegrees: Double
     @Binding var tintColor: Color
+    @Binding var pose: MeccaPose
     let facePhoto: UIImage?
     let cameraAvailable: Bool
     let onTakeFacePhoto: () -> Void
@@ -1054,6 +1063,14 @@ private struct MeccaPlacementControls: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            Picker("Mecca pose", selection: $pose) {
+                ForEach(MeccaPose.allCases) { pose in
+                    Text(pose.displayName).tag(pose)
+                }
+            }
+            .pickerStyle(.menu)
+            .font(.subheadline.weight(.semibold))
+
             ColorPicker(
                 "Mecca color",
                 selection: $tintColor,
@@ -1396,9 +1413,14 @@ private struct PlacementARView: UIViewRepresentable {
         var parent: PlacementARView
         weak var arView: ARView?
 
-        private struct PlacedMecca {
+        private final class PlacedMecca {
             let anchor: AnchorEntity
-            let entity: Entity
+            var entity: Entity
+
+            init(anchor: AnchorEntity, entity: Entity) {
+                self.anchor = anchor
+                self.entity = entity
+            }
         }
 
         private struct SurfaceHit {
@@ -1421,6 +1443,7 @@ private struct PlacementARView: UIViewRepresentable {
         private var lastReportedCanPlace = false
         private var lastPlaceToken = 0
         private var faceCameraIsActive = false
+        private var poseLoadTask: Task<Void, Never>?
 
         init(_ parent: PlacementARView) {
             self.parent = parent
@@ -1486,6 +1509,7 @@ private struct PlacementARView: UIViewRepresentable {
         }
 
         func tearDown() {
+            poseLoadTask?.cancel()
             updateSubscription?.cancel()
             updateSubscription = nil
         }
@@ -1579,6 +1603,8 @@ private struct PlacementARView: UIViewRepresentable {
             // placed preview before adding the new one.
             placedMeccas.forEach { $0.anchor.removeFromParent() }
             placedMeccas.removeAll()
+            poseLoadTask?.cancel()
+            poseLoadTask = nil
 
             // Keep the character upright in gravity-aligned world space even
             // when the surface is a wall. The surface normal is still used to
@@ -1610,7 +1636,9 @@ private struct PlacementARView: UIViewRepresentable {
             Task { @MainActor [weak self] in
                 guard let self, let arView = self.arView else { return }
 
-                let entity = await MeccaEntityFactory.make()
+                let entity = await MeccaEntityFactory.make(
+                    pose: placementConfiguration.pose
+                )
                 anchor.addChild(entity)
                 arView.scene.addAnchor(anchor)
 
@@ -1619,13 +1647,17 @@ private struct PlacementARView: UIViewRepresentable {
                     entity: entity
                 )
                 self.placedMeccas.append(placedMecca)
+                let currentConfiguration = self.parent.configuration
                 self.apply(
-                    placementConfiguration,
-                    facePhoto: placementFacePhoto,
+                    currentConfiguration,
+                    facePhoto: self.parent.facePhoto ?? placementFacePhoto,
                     shouldUpdateFacePhoto: true,
                     to: placedMecca
                 )
-                self.lastAppliedConfiguration = placementConfiguration
+                self.lastAppliedConfiguration = currentConfiguration
+                if currentConfiguration.pose != placementConfiguration.pose {
+                    self.replacePose(currentConfiguration.pose, for: placedMecca)
+                }
 
                 self.parent.placementCount = 1
                 self.parent.message = "Mecca placed — slowly scan a full 360° around it"
@@ -1636,6 +1668,8 @@ private struct PlacementARView: UIViewRepresentable {
             guard resetToken != lastResetToken else { return }
             placedMeccas.forEach { $0.anchor.removeFromParent() }
             placedMeccas.removeAll()
+            poseLoadTask?.cancel()
+            poseLoadTask = nil
             if let existing = persistedAnchor {
                 arView?.session.remove(anchor: existing)
                 persistedAnchor = nil
@@ -1649,6 +1683,11 @@ private struct PlacementARView: UIViewRepresentable {
             let configuration = parent.configuration
             guard configuration != lastAppliedConfiguration else { return }
             if let latest = placedMeccas.last {
+                if configuration.pose != lastAppliedConfiguration?.pose {
+                    replacePose(configuration.pose, for: latest)
+                    lastAppliedConfiguration = configuration
+                    return
+                }
                 let facePhotoChanged = configuration.facePhotoRevision
                     != lastAppliedConfiguration?.facePhotoRevision
                 apply(
@@ -1659,6 +1698,37 @@ private struct PlacementARView: UIViewRepresentable {
                 )
             }
             lastAppliedConfiguration = configuration
+        }
+
+        private func replacePose(
+            _ pose: MeccaPose,
+            for placedMecca: PlacedMecca
+        ) {
+            poseLoadTask?.cancel()
+            parent.message = "Loading \(pose.displayName)…"
+
+            poseLoadTask = Task { @MainActor [weak self, weak placedMecca] in
+                let replacement = await MeccaEntityFactory.make(pose: pose)
+                guard
+                    !Task.isCancelled,
+                    let self,
+                    let placedMecca,
+                    self.placedMeccas.last === placedMecca,
+                    self.parent.configuration.pose == pose
+                else { return }
+
+                placedMecca.entity.removeFromParent()
+                placedMecca.anchor.addChild(replacement)
+                placedMecca.entity = replacement
+                self.apply(
+                    self.parent.configuration,
+                    facePhoto: self.parent.facePhoto,
+                    shouldUpdateFacePhoto: true,
+                    to: placedMecca
+                )
+                self.parent.message = "\(pose.displayName) selected — continue scanning"
+                self.poseLoadTask = nil
+            }
         }
 
         private func apply(

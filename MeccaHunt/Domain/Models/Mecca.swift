@@ -18,6 +18,48 @@ struct MeccaAppearance: Codable, Hashable, Sendable {
     var red: Double
     var green: Double
     var blue: Double
+    var pose: MeccaPose
+
+    private enum CodingKeys: String, CodingKey {
+        case sizeMillimeters
+        case xRotationDegrees
+        case yRotationDegrees
+        case red
+        case green
+        case blue
+        case pose
+    }
+
+    init(
+        sizeMillimeters: Double,
+        xRotationDegrees: Double,
+        yRotationDegrees: Double,
+        red: Double,
+        green: Double,
+        blue: Double,
+        pose: MeccaPose = .classic
+    ) {
+        self.sizeMillimeters = sizeMillimeters
+        self.xRotationDegrees = xRotationDegrees
+        self.yRotationDegrees = yRotationDegrees
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.pose = pose
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sizeMillimeters: try values.decode(Double.self, forKey: .sizeMillimeters),
+            xRotationDegrees: try values.decode(Double.self, forKey: .xRotationDegrees),
+            yRotationDegrees: try values.decode(Double.self, forKey: .yRotationDegrees),
+            red: try values.decode(Double.self, forKey: .red),
+            green: try values.decode(Double.self, forKey: .green),
+            blue: try values.decode(Double.self, forKey: .blue),
+            pose: try values.decodeIfPresent(MeccaPose.self, forKey: .pose) ?? .classic
+        )
+    }
 
     static let `default` = MeccaAppearance(
         sizeMillimeters: 25,
@@ -25,7 +67,8 @@ struct MeccaAppearance: Codable, Hashable, Sendable {
         yRotationDegrees: 0,
         red: 1,
         green: 1,
-        blue: 1
+        blue: 1,
+        pose: .classic
     )
 }
 
@@ -36,7 +79,7 @@ struct Mecca: Identifiable, Codable, Hashable, Sendable {
     let ownerUsername: String
     let name: String
     let coordinate: GeoCoordinate
-    /// Owner-chosen color, size, and rotation, applied wherever it is rendered.
+    /// Owner-chosen pose, color, size, and rotation, applied wherever it renders.
     let appearance: MeccaAppearance
     let createdAt: Date
     /// Number of hunters who have already claimed this Mecca.

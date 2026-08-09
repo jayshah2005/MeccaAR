@@ -7,6 +7,7 @@ struct MeccaPhotoPlacementEditor: View {
 
     let image: UIImage
     let tintColor: Color
+    let pose: MeccaPose
     let onSave: (MeccaPhotoPlacement) -> Void
 
     @State private var placement: MeccaPhotoPlacement
@@ -17,11 +18,13 @@ struct MeccaPhotoPlacementEditor: View {
     init(
         image: UIImage,
         tintColor: Color,
+        pose: MeccaPose,
         initialPlacement: MeccaPhotoPlacement,
         onSave: @escaping (MeccaPhotoPlacement) -> Void
     ) {
         self.image = image
         self.tintColor = tintColor
+        self.pose = pose
         self.onSave = onSave
         _placement = State(initialValue: initialPlacement.clamped)
     }
@@ -101,6 +104,7 @@ struct MeccaPhotoPlacementEditor: View {
         return ZStack {
             MeccaFullBodyPreview(
                 tintColor: UIColor(tintColor),
+                pose: pose,
                 aspectRatio: $previewAspectRatio
             )
 
@@ -149,6 +153,7 @@ struct MeccaPhotoPlacementEditor: View {
 
 private struct MeccaFullBodyPreview: UIViewRepresentable {
     let tintColor: UIColor
+    let pose: MeccaPose
     @Binding var aspectRatio: CGFloat
 
     func makeCoordinator() -> Coordinator {
@@ -166,7 +171,7 @@ private struct MeccaFullBodyPreview: UIViewRepresentable {
         context.coordinator.loadTask = Task { @MainActor [weak arView] in
             guard let arView else { return }
 
-            let entity = await MeccaEntityFactory.make()
+            let entity = await MeccaEntityFactory.make(pose: pose)
             MeccaEntityFactory.applyColor(tintColor, to: entity)
             MeccaEntityFactory.preparePhotoPlacementPreview(entity)
             entity.scale = SIMD3<Float>(repeating: 10)

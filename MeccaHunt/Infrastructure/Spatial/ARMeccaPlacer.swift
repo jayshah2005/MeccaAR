@@ -203,7 +203,9 @@ final class ARMeccaPlacer {
         self.anchor = anchor
 
         Task { @MainActor [weak self] in
-            let entity = await MeccaEntityFactory.make()
+            let entity = await MeccaEntityFactory.make(
+                pose: self?.appearance.pose ?? .classic
+            )
             guard self?.generation == requestedGeneration else { return }
             let appearance = self?.appearance ?? .default
             MeccaEntityFactory.apply(

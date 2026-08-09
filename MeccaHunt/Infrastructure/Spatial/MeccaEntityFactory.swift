@@ -18,53 +18,52 @@ struct MeccaPhotoPlacement: Equatable, Sendable {
 
 @MainActor
 enum MeccaEntityFactory {
-    /// Scale 1 is a 30 mm character; the placement default of 0.5 is 15 mm.
+    /// Scale 1 is a 30 mm character; the placement default is 25 mm.
     static let referenceHeightMeters: Float = 0.03
     private static let faceOverlayName = "mecca-face-photo"
-    private static var cachedTemplate: Entity?
-    private static var loadTask: Task<Entity, Never>?
+    private static var cachedTemplates: [MeccaPose: Entity] = [:]
+    private static var loadTasks: [MeccaPose: Task<Entity, Never>] = [:]
 
-    static func make() async -> Entity {
-        return await template().clone(recursive: true)
+    static func make(pose: MeccaPose = .classic) async -> Entity {
+        return await template(for: pose).clone(recursive: true)
     }
 
-    /// Warms the cached model template ahead of time so the first `make()` (e.g.
-    /// when a Mecca comes into frame) only pays for a cheap clone, not the full
-    /// asset load. Safe to call repeatedly; the load happens at most once.
-    static func preload() async {
-        _ = await template()
+    /// Warms a cached pose template ahead of time so its first `make()` only
+    /// pays for a cheap clone, not a full USDZ import.
+    static func preload(pose: MeccaPose = .classic) async {
+        _ = await template(for: pose)
     }
 
-    /// Returns the shared, prepared template, loading it once and caching it.
-    private static func template() async -> Entity {
-        if let cachedTemplate {
+    /// Returns the shared, prepared template for a pose, loading it once.
+    private static func template(for pose: MeccaPose) async -> Entity {
+        if let cachedTemplate = cachedTemplates[pose] {
             return cachedTemplate
         }
 
         // Coalesce concurrent callers onto a single in-flight load so multiple
-        // Meccas appearing at once don't each import the asset.
-        if let loadTask {
+        // Meccas with the same pose don't each import the asset.
+        if let loadTask = loadTasks[pose] {
             return await loadTask.value
         }
 
         let task = Task { () -> Entity in
             do {
-                let imported = try await loadImportedModel()
+                let imported = try await loadImportedModel(pose: pose)
                 return prepare(imported)
             } catch {
                 return makeProceduralFallback()
             }
         }
-        loadTask = task
+        loadTasks[pose] = task
         let template = await task.value
-        cachedTemplate = template
-        loadTask = nil
+        cachedTemplates[pose] = template
+        loadTasks[pose] = nil
         return template
     }
 
-    private static func loadImportedModel() async throws -> Entity {
+    private static func loadImportedModel(pose: MeccaPose) async throws -> Entity {
         for try await entity in Entity.loadAsync(
-            named: "Mecca",
+            named: pose.resourceName,
             in: .main
         ).values {
             return entity

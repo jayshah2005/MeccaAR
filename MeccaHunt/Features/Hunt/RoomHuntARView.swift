@@ -120,7 +120,11 @@ struct RoomHuntARView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .task { await MeccaEntityFactory.preload() }
+        .task {
+            await MeccaEntityFactory.preload(
+                pose: targets.first?.appearance.pose ?? .classic
+            )
+        }
         .task { await loadPrimaryWorldMapIfNeeded() }
         .task { await loadFacePhotos() }
         .task(id: preciseFallbackKey) { await watchPreciseFallback() }

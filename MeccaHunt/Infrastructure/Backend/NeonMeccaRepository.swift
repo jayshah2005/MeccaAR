@@ -20,6 +20,7 @@ struct NeonMeccaRepository: MeccaRepository {
                 m.tint_red as tint_red,
                 m.tint_green as tint_green,
                 m.tint_blue as tint_blue,
+                coalesce(m.pose, 'classic') as pose,
                 coalesce(m.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from m.created_at) as created_at_epoch,
                 count(c.id)::int as claim_count,
@@ -56,20 +57,20 @@ struct NeonMeccaRepository: MeccaRepository {
                 insert into meccas (
                     owner_id, name, latitude, longitude, altitude,
                     size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
-                    placement_mode
+                    pose, placement_mode
                 )
                 select
                     $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision,
                     $7::double precision, $8::double precision, $9::double precision,
                     $10::double precision, $11::double precision, $12::double precision,
-                    $13
+                    $13, $14
                 where not exists (
                     select 1 from meccas
                     where owner_id = $1::uuid and created_at >= $6::timestamptz
                 )
                 returning id, owner_id, name, latitude, longitude, altitude,
                     size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
-                    placement_mode, created_at
+                    pose, placement_mode, created_at
             )
             select
                 i.id as id,
@@ -85,6 +86,7 @@ struct NeonMeccaRepository: MeccaRepository {
                 i.tint_red as tint_red,
                 i.tint_green as tint_green,
                 i.tint_blue as tint_blue,
+                coalesce(i.pose, 'classic') as pose,
                 coalesce(i.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from i.created_at) as created_at_epoch,
                 0 as claim_count,
@@ -107,6 +109,7 @@ struct NeonMeccaRepository: MeccaRepository {
                 .double(appearance.red),
                 .double(appearance.green),
                 .double(appearance.blue),
+                .text(appearance.pose.rawValue),
                 .text(placementMode.rawValue)
             ]
         )
@@ -131,24 +134,24 @@ struct NeonMeccaRepository: MeccaRepository {
                 insert into meccas (
                     owner_id, name, latitude, longitude, altitude,
                     size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
-                    placement_mode
+                    pose, placement_mode
                 )
                 select
                     $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision,
                     $7::double precision, $8::double precision, $9::double precision,
                     $10::double precision, $11::double precision, $12::double precision,
-                    'world_map'
+                    $13, 'world_map'
                 where not exists (
                     select 1 from meccas
                     where owner_id = $1::uuid and created_at >= $6::timestamptz
                 )
                 returning id, owner_id, name, latitude, longitude, altitude,
                     size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue,
-                    placement_mode, created_at
+                    pose, placement_mode, created_at
             ),
             mapped as (
                 insert into mecca_world_maps (mecca_id, data)
-                select id, $13 from inserted
+                select id, $14 from inserted
                 returning mecca_id
             )
             select
@@ -165,6 +168,7 @@ struct NeonMeccaRepository: MeccaRepository {
                 i.tint_red as tint_red,
                 i.tint_green as tint_green,
                 i.tint_blue as tint_blue,
+                coalesce(i.pose, 'classic') as pose,
                 coalesce(i.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from i.created_at) as created_at_epoch,
                 0 as claim_count,
@@ -188,6 +192,7 @@ struct NeonMeccaRepository: MeccaRepository {
                 .double(appearance.red),
                 .double(appearance.green),
                 .double(appearance.blue),
+                .text(appearance.pose.rawValue),
                 .text(worldMapData.base64EncodedString())
             ]
         )
@@ -349,6 +354,7 @@ struct NeonMeccaRepository: MeccaRepository {
                 m.tint_red as tint_red,
                 m.tint_green as tint_green,
                 m.tint_blue as tint_blue,
+                coalesce(m.pose, 'classic') as pose,
                 coalesce(m.placement_mode, 'world_map') as placement_mode,
                 extract(epoch from m.created_at) as created_at_epoch,
                 0 as claim_count,
@@ -460,7 +466,8 @@ struct NeonMeccaRepository: MeccaRepository {
                 yRotationDegrees: row.double("y_rotation") ?? 0,
                 red: row.double("tint_red") ?? 1,
                 green: row.double("tint_green") ?? 1,
-                blue: row.double("tint_blue") ?? 1
+                blue: row.double("tint_blue") ?? 1,
+                pose: MeccaPose(rawValue: row.string("pose") ?? "") ?? .classic
             ),
             createdAt: createdAt,
             claimCount: row.int("claim_count") ?? 0,

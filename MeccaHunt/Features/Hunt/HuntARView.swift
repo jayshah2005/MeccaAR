@@ -103,7 +103,7 @@ struct HuntARView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .task { await MeccaEntityFactory.preload() }
+        .task { await MeccaEntityFactory.preload(pose: target.appearance.pose) }
         .task { await loadWorldMap() }
         .task(id: preciseFallbackKey) { await watchPreciseFallback() }
         .onChange(of: didTapMecca) { _, tapped in

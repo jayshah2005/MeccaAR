@@ -128,7 +128,7 @@ final class GeoMeccaARController: NSObject, ARSessionDelegate,
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let entity = await MeccaEntityFactory.make()
+            let entity = await MeccaEntityFactory.make(pose: self.appearance.pose)
             MeccaEntityFactory.apply(self.appearance, to: entity)
             if let facePhoto = self.facePhoto {
                 _ = MeccaEntityFactory.applyFacePhoto(facePhoto, to: entity)

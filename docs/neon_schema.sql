@@ -24,11 +24,16 @@ create table if not exists meccas (
     tint_red   double precision not null default 1,
     tint_green double precision not null default 1,
     tint_blue  double precision not null default 1,
+    -- Bundled USDZ pose identifier. Existing Meccas remain on the classic pose.
+    pose       text not null default 'classic',
     -- 'world_map' (indoor/LiDAR AR map) or 'geo' (outdoor ARGeoTracking).
     placement_mode text not null default 'world_map',
     created_at timestamptz not null default now(),
     state      text not null default 'active'
 );
+
+-- Safe migration for databases created before pose selection was introduced.
+alter table meccas add column if not exists pose text not null default 'classic';
 
 create table if not exists hunt_claims (
     id            uuid primary key default gen_random_uuid(),
