@@ -50,6 +50,7 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
     private var fallbackIsVisible = false
     private var generation = 0
     private var facePhoto: UIImage?
+    private var facePhotoPlacement = MeccaPhotoPlacement.faceDefault
 
     /// True once tracking has reached full quality (i.e. relocalized against the
     /// saved map). Saved anchor transforms are only trustworthy after this.
@@ -64,12 +65,14 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
         appearance: MeccaAppearance,
         fallbackPlacement: FallbackPlacement? = nil,
         facePhoto: UIImage? = nil,
+        facePhotoPlacement: MeccaPhotoPlacement = .faceDefault,
         in arView: ARView
     ) {
         self.arView = arView
         self.appearance = appearance
         self.fallbackPlacement = fallbackPlacement
         self.facePhoto = facePhoto
+        self.facePhotoPlacement = facePhotoPlacement
         fallbackEnabled = fallbackPlacement != nil
         arView.session.delegate = self
         ensureEntity()
@@ -121,6 +124,7 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
         fallbackEnabled = false
         fallbackPlacement = nil
         facePhoto = nil
+        facePhotoPlacement = .faceDefault
         placed = false
         relocalized = false
         resolvedTransform = nil
@@ -129,12 +133,16 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
     }
 
     /// Applies a face photo that arrived after `start` (async download).
-    func updateFacePhoto(_ image: UIImage?) {
+    func updateFacePhoto(
+        _ image: UIImage?,
+        placement: MeccaPhotoPlacement = .faceDefault
+    ) {
         facePhoto = image
+        facePhotoPlacement = placement
         guard let meccaEntity else { return }
         _ = MeccaEntityFactory.applyFacePhoto(
             image,
-            placement: .initial,
+            placement: placement,
             to: meccaEntity
         )
     }
@@ -199,7 +207,7 @@ final class PreciseMeccaARController: NSObject, ARSessionDelegate {
             )
             _ = MeccaEntityFactory.applyFacePhoto(
                 self.facePhoto,
-                placement: .initial,
+                placement: self.facePhotoPlacement,
                 to: entity
             )
             self.meccaEntity = entity

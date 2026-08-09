@@ -18,20 +18,21 @@ enum MeccaPose: String, CaseIterable, Codable, Hashable, Identifiable, Sendable 
 
     var id: String { rawValue }
 
+    /// Short labels shown under the visual pose thumbnails.
     var displayName: String {
         switch self {
         case .classic: "Classic"
-        case .pose09: "Pose 9"
-        case .pose10: "Pose 10"
-        case .pose11: "Pose 11"
-        case .pose12: "Pose 12"
-        case .pose13: "Pose 13"
-        case .pose14: "Pose 14"
-        case .pose15: "Pose 15"
-        case .pose16: "Pose 16"
-        case .pose17: "Pose 17"
-        case .pose18: "Pose 18"
-        case .pose19: "Pose 19"
+        case .pose09: "Look A"
+        case .pose10: "Look B"
+        case .pose11: "Look C"
+        case .pose12: "Look D"
+        case .pose13: "Look E"
+        case .pose14: "Look F"
+        case .pose15: "Look G"
+        case .pose16: "Look H"
+        case .pose17: "Look I"
+        case .pose18: "Look J"
+        case .pose19: "Look K"
         }
     }
 

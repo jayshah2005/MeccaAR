@@ -24,7 +24,7 @@ struct RoomHuntARView: View {
     @State private var didAttemptWorldMapLoad = false
     @State private var primaryWorldMapUnavailable = false
     @State private var preciseState: PreciseMeccaARController.State = .initializing
-    @State private var facePhotos: [UUID: UIImage] = [:]
+    @State private var facePhotos: [UUID: LoadedFacePhoto] = [:]
     @State private var awardedPoints = 0
 
     private enum FallbackTiming {
@@ -74,7 +74,8 @@ struct RoomHuntARView: View {
                 lateralOffsetMeters: (Double(index) - midpoint) * 0.45,
                 headingDegrees: currentHeading,
                 appearance: mecca.appearance,
-                facePhoto: facePhotos[mecca.id]
+                facePhoto: facePhotos[mecca.id]?.image,
+                facePhotoPlacement: facePhotos[mecca.id]?.placement ?? .faceDefault
             )
         }
     }
@@ -273,9 +274,12 @@ struct RoomHuntARView: View {
         for target in targets where target.hasFacePhoto && facePhotos[target.id] == nil {
             guard
                 let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
-                let image = UIImage(data: data)
+                let decoded = MeccaFacePhotoCodec.decode(data)
             else { continue }
-            facePhotos[target.id] = image
+            facePhotos[target.id] = LoadedFacePhoto(
+                image: decoded.image,
+                placement: decoded.placement
+            )
         }
     }
 
@@ -352,6 +356,11 @@ struct RoomHuntARView: View {
     }
 }
 
+private struct LoadedFacePhoto {
+    let image: UIImage
+    let placement: MeccaPhotoPlacement
+}
+
 private struct RoomHuntPlacement: Identifiable {
     let id: UUID
     let bearingDegrees: Double
@@ -360,6 +369,7 @@ private struct RoomHuntPlacement: Identifiable {
     let headingDegrees: Double?
     let appearance: MeccaAppearance
     let facePhoto: UIImage?
+    let facePhotoPlacement: MeccaPhotoPlacement
 }
 
 private struct RoomHuntCrosshair: View {
@@ -494,6 +504,7 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                             : nil,
                         appearance: placement.appearance,
                         facePhoto: placement.facePhoto,
+                        facePhotoPlacement: placement.facePhotoPlacement,
                         in: arView
                     )
                     continue
@@ -511,14 +522,18 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                         : nil,
                     appearance: placement.appearance,
                     facePhoto: placement.facePhoto,
+                    facePhotoPlacement: placement.facePhotoPlacement,
                     in: arView
                 )
             }
 
             if let primaryID = parent.primaryMeccaID,
                hasActivatedPrimaryWorldMap,
-               let face = placements.first(where: { $0.id == primaryID })?.facePhoto {
-                preciseController?.updateFacePhoto(face)
+               let primary = placements.first(where: { $0.id == primaryID }) {
+                preciseController?.updateFacePhoto(
+                    primary.facePhoto,
+                    placement: primary.facePhotoPlacement
+                )
             }
         }
 
@@ -548,6 +563,7 @@ private struct RoomHuntARContainer: UIViewRepresentable {
                     headingDegrees: primary.headingDegrees
                 ),
                 facePhoto: primary.facePhoto,
+                facePhotoPlacement: primary.facePhotoPlacement,
                 in: arView
             )
         }

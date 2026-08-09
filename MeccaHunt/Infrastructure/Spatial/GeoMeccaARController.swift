@@ -23,6 +23,7 @@ final class GeoMeccaARController: NSObject, ARSessionDelegate,
     private var meccaEntity: Entity?
     private var appearance: MeccaAppearance = .default
     private var facePhoto: UIImage?
+    private var facePhotoPlacement = MeccaPhotoPlacement.faceDefault
     private var coachingOverlay: ARCoachingOverlayView?
     private var geoAnchor: ARGeoAnchor?
     private var placed = false
@@ -32,11 +33,13 @@ final class GeoMeccaARController: NSObject, ARSessionDelegate,
         altitude: Double?,
         appearance: MeccaAppearance,
         facePhoto: UIImage? = nil,
+        facePhotoPlacement: MeccaPhotoPlacement = .faceDefault,
         in arView: ARView
     ) {
         self.arView = arView
         self.appearance = appearance
         self.facePhoto = facePhoto
+        self.facePhotoPlacement = facePhotoPlacement
         arView.session.delegate = self
 
         let configuration = ARGeoTrackingConfiguration()
@@ -131,7 +134,11 @@ final class GeoMeccaARController: NSObject, ARSessionDelegate,
             let entity = await MeccaEntityFactory.make(pose: self.appearance.pose)
             MeccaEntityFactory.apply(self.appearance, to: entity)
             if let facePhoto = self.facePhoto {
-                _ = MeccaEntityFactory.applyFacePhoto(facePhoto, to: entity)
+                _ = MeccaEntityFactory.applyFacePhoto(
+                    facePhoto,
+                    placement: self.facePhotoPlacement,
+                    to: entity
+                )
             }
             anchorEntity.addChild(entity)
             self.meccaEntity = entity
@@ -150,9 +157,17 @@ final class GeoMeccaARController: NSObject, ARSessionDelegate,
     }
 
     /// Applies a face photo that arrived after `start` (async download).
-    func updateFacePhoto(_ image: UIImage?) {
+    func updateFacePhoto(
+        _ image: UIImage?,
+        placement: MeccaPhotoPlacement = .faceDefault
+    ) {
         facePhoto = image
+        facePhotoPlacement = placement
         guard let meccaEntity else { return }
-        _ = MeccaEntityFactory.applyFacePhoto(image, to: meccaEntity)
+        _ = MeccaEntityFactory.applyFacePhoto(
+            image,
+            placement: placement,
+            to: meccaEntity
+        )
     }
 }

@@ -30,6 +30,7 @@ final class ARMeccaPlacer {
     private var frameRetryTask: Task<Void, Never>?
     private var generation = 0
     private var facePhoto: UIImage?
+    private var facePhotoPlacement = MeccaPhotoPlacement.faceDefault
     private var appliedFacePhotoIdentity: ObjectIdentifier?
 
     private var appearanceOrientation: simd_quatf {
@@ -55,11 +56,13 @@ final class ARMeccaPlacer {
         headingDegrees: Double? = nil,
         appearance: MeccaAppearance = .default,
         facePhoto: UIImage? = nil,
+        facePhotoPlacement: MeccaPhotoPlacement = .faceDefault,
         in arView: ARView
     ) {
         _ = freezeWithinMeters
         self.appearance = appearance
         self.facePhoto = facePhoto
+        self.facePhotoPlacement = facePhotoPlacement
         pendingPlacement = PendingPlacement(
             bearingDegrees: bearingDegrees,
             distanceMeters: distanceMeters,
@@ -83,6 +86,7 @@ final class ARMeccaPlacer {
         freezeWithinMeters: Double,
         appearance: MeccaAppearance = .default,
         facePhoto: UIImage? = nil,
+        facePhotoPlacement: MeccaPhotoPlacement = .faceDefault,
         in arView: ARView
     ) {
         update(
@@ -92,6 +96,7 @@ final class ARMeccaPlacer {
             headingDegrees: deviceHeadingDegrees,
             appearance: appearance,
             facePhoto: facePhoto,
+            facePhotoPlacement: facePhotoPlacement,
             in: arView
         )
     }
@@ -187,7 +192,7 @@ final class ARMeccaPlacer {
         guard identity != appliedFacePhotoIdentity else { return }
         _ = MeccaEntityFactory.applyFacePhoto(
             facePhoto,
-            placement: .initial,
+            placement: facePhotoPlacement,
             to: meccaRoot
         )
         appliedFacePhotoIdentity = identity

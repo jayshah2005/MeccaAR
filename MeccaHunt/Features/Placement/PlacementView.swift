@@ -194,6 +194,12 @@ struct PlacementView: View {
         .task(id: selectedPose) {
             await MeccaEntityFactory.preload(pose: selectedPose)
         }
+        .onChange(of: selectedPose) { _, _ in
+            facePhotoPlacement = .faceDefault
+            if facePhoto != nil {
+                facePhotoRevision += 1
+            }
+        }
         .task {
             location.start()
             await checkDailyLimit()
@@ -656,9 +662,13 @@ struct PlacementView: View {
                     worldMapData: worldMapData
                 )
                 if let jpeg = facePhoto?.jpegData(compressionQuality: 0.72) {
+                    let encoded = MeccaFacePhotoCodec.encode(
+                        jpegData: jpeg,
+                        placement: facePhotoPlacement
+                    )
                     try? await appState.dependencies.meccas.uploadFacePhoto(
                         meccaID: mecca.id,
-                        jpegData: jpeg
+                        jpegData: encoded
                     )
                 }
                 didSaveWithMap = true
@@ -1063,13 +1073,7 @@ private struct MeccaPlacementControls: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Picker("Mecca pose", selection: $pose) {
-                ForEach(MeccaPose.allCases) { pose in
-                    Text(pose.displayName).tag(pose)
-                }
-            }
-            .pickerStyle(.menu)
-            .font(.subheadline.weight(.semibold))
+            MeccaPosePicker(pose: $pose, tintColor: tintColor)
 
             ColorPicker(
                 "Mecca color",

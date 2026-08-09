@@ -21,6 +21,7 @@ struct HuntARView: View {
     @State private var mapLoad: MapLoad = .idle
     @State private var preciseState: PreciseMeccaARController.State = .relocalizing
     @State private var facePhoto: UIImage?
+    @State private var facePhotoPlacement = MeccaPhotoPlacement.faceDefault
     @State private var awardedPoints = 0
 
     private enum ClaimState: Equatable {
@@ -119,6 +120,7 @@ struct HuntARView: View {
                 worldMap: map,
                 appearance: target.appearance,
                 facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement,
                 fallbackPlacement: approximatePrecisePlacement,
                 didTapMecca: $didTapMecca,
                 state: $preciseState
@@ -128,6 +130,7 @@ struct HuntARView: View {
                 placement: placement,
                 appearance: target.appearance,
                 facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement,
                 didTapMecca: $didTapMecca
             )
         }
@@ -161,10 +164,12 @@ struct HuntARView: View {
 
     private func loadFacePhoto() async {
         guard target.hasFacePhoto else { return }
-        guard let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
-              let image = UIImage(data: data)
+        guard
+            let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
+            let decoded = MeccaFacePhotoCodec.decode(data)
         else { return }
-        facePhoto = image
+        facePhoto = decoded.image
+        facePhotoPlacement = decoded.placement
     }
 
     private func watchPreciseFallback() async {
@@ -345,6 +350,7 @@ private struct HuntARContainer: UIViewRepresentable {
     let placement: HuntPlacement?
     let appearance: MeccaAppearance
     let facePhoto: UIImage?
+    let facePhotoPlacement: MeccaPhotoPlacement
     @Binding var didTapMecca: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -373,6 +379,7 @@ private struct HuntARContainer: UIViewRepresentable {
                 freezeWithinMeters: HuntTuning.hintUntilMeters,
                 appearance: appearance,
                 facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement,
                 in: arView
             )
         }
@@ -419,6 +426,7 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
     let worldMap: ARWorldMap
     let appearance: MeccaAppearance
     let facePhoto: UIImage?
+    let facePhotoPlacement: MeccaPhotoPlacement
     let fallbackPlacement: PreciseMeccaARController.FallbackPlacement?
     @Binding var didTapMecca: Bool
     @Binding var state: PreciseMeccaARController.State
@@ -444,6 +452,7 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
             appearance: appearance,
             fallbackPlacement: fallbackPlacement,
             facePhoto: facePhoto,
+            facePhotoPlacement: facePhotoPlacement,
             in: arView
         )
         return arView
@@ -452,7 +461,10 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.controller.updateFallback(fallbackPlacement)
-        context.coordinator.controller.updateFacePhoto(facePhoto)
+        context.coordinator.controller.updateFacePhoto(
+            facePhoto,
+            placement: facePhotoPlacement
+        )
     }
 
     static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {

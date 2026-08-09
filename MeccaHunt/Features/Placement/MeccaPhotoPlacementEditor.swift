@@ -33,9 +33,9 @@ struct MeccaPhotoPlacementEditor: View {
         NavigationStack {
             VStack(spacing: 16) {
                 VStack(spacing: 4) {
-                    Text("Drag your photo onto the Mecca")
+                    Text("Place your face on the Mecca")
                         .font(.headline)
-                    Text("Move it anywhere on the front of the body, then tap Done.")
+                    Text("Drag the photo onto the head, then tap Done.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -59,7 +59,7 @@ struct MeccaPhotoPlacementEditor: View {
                 HStack {
                     Button("Reset", systemImage: "arrow.counterclockwise") {
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            placement = .initial
+                            placement = .faceDefault
                         }
                     }
                     .buttonStyle(.bordered)
@@ -95,7 +95,7 @@ struct MeccaPhotoPlacementEditor: View {
     private func placementCanvas(size: CGSize) -> some View {
         let contentWidth = size.width * (1 - modelMargin * 2)
         let contentHeight = size.height * (1 - modelMargin * 2)
-        let photoDiameter = size.height * 0.15
+        let photoDiameter = size.height * 0.09
         let photoX = size.width * modelMargin
             + CGFloat(placement.horizontal) * contentWidth
         let photoY = size.height * modelMargin

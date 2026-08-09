@@ -6,7 +6,12 @@ struct MeccaPhotoPlacement: Equatable, Sendable {
     var horizontal: Float
     var vertical: Float
 
-    static let initial = MeccaPhotoPlacement(horizontal: 0.5, vertical: 0.75)
+    /// Default UV for the character's face (upper front of the body), not the
+    /// torso center. `vertical` is measured from the feet upward.
+    static let faceDefault = MeccaPhotoPlacement(horizontal: 0.5, vertical: 0.88)
+
+    /// Compatibility alias used by older call sites and the placement editor.
+    static let initial = faceDefault
 
     var clamped: MeccaPhotoPlacement {
         MeccaPhotoPlacement(
@@ -263,7 +268,9 @@ enum MeccaEntityFactory {
         guard projection.verticalExtent > 0.0001 else { return false }
 
         let selectedPlacement = placement.clamped
-        let faceDiameter = projection.verticalExtent * 0.15
+        // Face-sized disk: large enough to read, small enough to sit on the
+        // head instead of covering the chest.
+        let faceDiameter = projection.verticalExtent * 0.09
         var material = UnlitMaterial()
         material.baseColor = .texture(texture)
         if #available(iOS 18.0, *) {
@@ -280,18 +287,82 @@ enum MeccaEntityFactory {
         faceOverlay.name = faceOverlayName
         faceOverlay.position = projection.position(
             for: selectedPlacement,
-            surfaceOffset: max(faceDiameter * 0.015, 0.00005)
+            surfaceOffset: max(faceDiameter * 0.02, 0.00005)
         )
         faceOverlay.orientation = projection.overlayOrientation
         entity.addChild(faceOverlay)
         return true
     }
 
-    /// Compatibility for persisted face photos that do not yet store the
-    /// owner's custom body coordinates.
+    /// Places the photo on the detected head region when no owner UV exists.
     @discardableResult
     static func applyFacePhoto(_ image: UIImage?, to entity: Entity) -> Bool {
-        applyFacePhoto(image, placement: .initial, to: entity)
+        applyFacePhoto(
+            image,
+            placement: facePlacement(on: entity),
+            to: entity
+        )
+    }
+
+    /// UV for the character head: prefer a named head/face mesh, otherwise the
+    /// upper front of the overall bounds.
+    static func facePlacement(on entity: Entity) -> MeccaPhotoPlacement {
+        let bodyBounds = entity.visualBounds(relativeTo: entity)
+        guard bodyBounds.extents.y > 0.0001 || bodyBounds.extents.z > 0.0001 else {
+            return .faceDefault
+        }
+
+        if let headBounds = namedHeadBounds(in: entity, relativeTo: entity) {
+            let projection = PhotoProjection(bounds: bodyBounds)
+            let horizontalSpan = max(
+                projection.horizontalAxis.value(in: bodyBounds.extents),
+                0.0001
+            )
+            let verticalSpan = max(projection.verticalExtent, 0.0001)
+            let headCenter = headBounds.center
+            let horizontal = (
+                projection.horizontalAxis.value(in: headCenter)
+                    - projection.horizontalAxis.value(in: bodyBounds.min)
+            ) / horizontalSpan
+            let vertical = (
+                projection.verticalAxis.value(in: headCenter)
+                    - projection.verticalAxis.value(in: bodyBounds.min)
+            ) / verticalSpan
+            return MeccaPhotoPlacement(
+                horizontal: horizontal,
+                // Bias slightly upward within the head so the photo sits on the
+                // face rather than the neck.
+                vertical: min(vertical + 0.02, 0.97)
+            ).clamped
+        }
+
+        return .faceDefault
+    }
+
+    private static func namedHeadBounds(
+        in entity: Entity,
+        relativeTo reference: Entity
+    ) -> BoundingBox? {
+        var best: BoundingBox?
+        var stack: [Entity] = [entity]
+        while let current = stack.popLast() {
+            stack.append(contentsOf: current.children)
+            let name = current.name.lowercased()
+            guard name.contains("head") || name.contains("face") else {
+                continue
+            }
+            let bounds = current.visualBounds(relativeTo: reference)
+            guard bounds.extents.max() > 0.0001 else { continue }
+            if let existing = best {
+                // Prefer the highest head-like mesh when several match.
+                if bounds.center.y >= existing.center.y {
+                    best = bounds
+                }
+            } else {
+                best = bounds
+            }
+        }
+        return best
     }
 
     /// Rotates a clone into the exact front projection used by the drag editor.

@@ -18,6 +18,7 @@ struct MeccaLocatorARView: View {
     @State private var preciseState: PreciseMeccaARController.State = .relocalizing
     @State private var geoState: GeoMeccaARController.State = .localizing
     @State private var facePhoto: UIImage?
+    @State private var facePhotoPlacement = MeccaPhotoPlacement.faceDefault
 
     private static let arrivedRadiusMeters = 2.0
 
@@ -87,6 +88,7 @@ struct MeccaLocatorARView: View {
                 worldMap: map,
                 appearance: target.appearance,
                 facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement,
                 placement: placement,
                 deviceHeadingDegrees: location.heading?.trueHeading
                     ?? location.heading?.magneticHeading,
@@ -98,6 +100,7 @@ struct MeccaLocatorARView: View {
                 altitude: target.altitude,
                 appearance: target.appearance,
                 facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement,
                 placement: placement,
                 deviceHeadingDegrees: location.heading?.trueHeading
                     ?? location.heading?.magneticHeading,
@@ -107,7 +110,8 @@ struct MeccaLocatorARView: View {
             LocatorARContainer(
                 placement: placement,
                 appearance: target.appearance,
-                facePhoto: facePhoto
+                facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement
             )
         }
     }
@@ -142,10 +146,12 @@ struct MeccaLocatorARView: View {
 
     private func loadFacePhoto() async {
         guard target.hasFacePhoto else { return }
-        guard let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
-              let image = UIImage(data: data)
+        guard
+            let data = try? await appState.dependencies.meccas.facePhoto(for: target.id),
+            let decoded = MeccaFacePhotoCodec.decode(data)
         else { return }
-        facePhoto = image
+        facePhoto = decoded.image
+        facePhotoPlacement = decoded.placement
     }
 
     private var topBar: some View {
@@ -254,6 +260,7 @@ private struct LocatorARContainer: UIViewRepresentable {
     let placement: LocatorPlacement?
     let appearance: MeccaAppearance
     let facePhoto: UIImage?
+    let facePhotoPlacement: MeccaPhotoPlacement
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -273,6 +280,7 @@ private struct LocatorARContainer: UIViewRepresentable {
                 freezeWithinMeters: 2.5,
                 appearance: appearance,
                 facePhoto: facePhoto,
+                facePhotoPlacement: facePhotoPlacement,
                 in: arView
             )
         }
@@ -304,6 +312,7 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
     let worldMap: ARWorldMap
     let appearance: MeccaAppearance
     let facePhoto: UIImage?
+    let facePhotoPlacement: MeccaPhotoPlacement
     let placement: LocatorPlacement?
     let deviceHeadingDegrees: Double?
     @Binding var state: PreciseMeccaARController.State
@@ -324,6 +333,7 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
             worldMap: worldMap,
             appearance: appearance,
             facePhoto: facePhoto,
+            facePhotoPlacement: facePhotoPlacement,
             in: arView
         )
         return arView
@@ -331,7 +341,10 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.controller.updateFacePhoto(facePhoto)
+        context.coordinator.controller.updateFacePhoto(
+            facePhoto,
+            placement: facePhotoPlacement
+        )
         guard
             context.coordinator.parent.state != .located,
             let placement,
@@ -346,6 +359,7 @@ private struct LocatorPreciseARContainer: UIViewRepresentable {
             freezeWithinMeters: MeccaLocatorARView.guideFreezeMeters,
             appearance: appearance,
             facePhoto: facePhoto,
+            facePhotoPlacement: facePhotoPlacement,
             in: arView
         )
     }
@@ -372,6 +386,7 @@ private struct LocatorGeoARContainer: UIViewRepresentable {
     let altitude: Double?
     let appearance: MeccaAppearance
     let facePhoto: UIImage?
+    let facePhotoPlacement: MeccaPhotoPlacement
     let placement: LocatorPlacement?
     let deviceHeadingDegrees: Double?
     @Binding var state: GeoMeccaARController.State
@@ -393,6 +408,7 @@ private struct LocatorGeoARContainer: UIViewRepresentable {
             altitude: altitude,
             appearance: appearance,
             facePhoto: facePhoto,
+            facePhotoPlacement: facePhotoPlacement,
             in: arView
         )
         return arView
@@ -400,7 +416,10 @@ private struct LocatorGeoARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.controller.updateFacePhoto(facePhoto)
+        context.coordinator.controller.updateFacePhoto(
+            facePhoto,
+            placement: facePhotoPlacement
+        )
         guard
             context.coordinator.parent.state != .located,
             let placement,
@@ -415,6 +434,7 @@ private struct LocatorGeoARContainer: UIViewRepresentable {
             freezeWithinMeters: MeccaLocatorARView.guideFreezeMeters,
             appearance: appearance,
             facePhoto: facePhoto,
+            facePhotoPlacement: facePhotoPlacement,
             in: arView
         )
     }
