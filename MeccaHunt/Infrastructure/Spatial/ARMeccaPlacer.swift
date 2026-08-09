@@ -10,21 +10,36 @@ import RealityKit
 /// the last stretch and find it themselves.
 @MainActor
 final class ARMeccaPlacer {
+    /// A distant GPS marker is scaled up from its real (mm) size so it stays
+    /// visible from several metres away; color and rotation still match.
+    private static let displayScale: Float = 0.6
+
     private(set) var meccaRoot: Entity?
     private var anchor: AnchorEntity?
     private var isCreating = false
     private var frozen = false
+    private var appearance: MeccaAppearance = .default
+
+    private var appearanceOrientation: simd_quatf {
+        let xRadians = Float(appearance.xRotationDegrees) * .pi / 180
+        let yRadians = Float(appearance.yRotationDegrees) * .pi / 180
+        return simd_quatf(angle: yRadians, axis: [0, 1, 0])
+            * simd_quatf(angle: xRadians, axis: [1, 0, 0])
+    }
 
     /// - Parameters:
     ///   - bearingDegrees: Clockwise bearing from true north to the target.
     ///   - distanceMeters: Horizontal GPS distance to the target.
     ///   - freezeWithinMeters: Stop re-pointing once this close.
+    ///   - appearance: The owner's saved color/size/rotation for the Mecca.
     func update(
         bearingDegrees: Double,
         distanceMeters: Double,
         freezeWithinMeters: Double,
+        appearance: MeccaAppearance = .default,
         in arView: ARView
     ) {
+        self.appearance = appearance
         ensureEntity(in: arView)
 
         guard
@@ -47,8 +62,8 @@ final class ARMeccaPlacer {
 
         meccaRoot.move(
             to: Transform(
-                scale: SIMD3<Float>(repeating: 0.6),
-                rotation: simd_quatf(angle: 0, axis: [0, 1, 0]),
+                scale: SIMD3<Float>(repeating: Self.displayScale),
+                rotation: appearanceOrientation,
                 translation: target
             ),
             relativeTo: nil,
@@ -76,7 +91,12 @@ final class ARMeccaPlacer {
 
         Task { @MainActor [weak self] in
             let entity = await MeccaEntityFactory.make()
-            entity.scale = [0.6, 0.6, 0.6]
+            let appearance = self?.appearance ?? .default
+            MeccaEntityFactory.apply(
+                appearance,
+                to: entity,
+                displayScale: Self.displayScale
+            )
             anchor.addChild(entity)
             self?.meccaRoot = entity
             self?.isCreating = false

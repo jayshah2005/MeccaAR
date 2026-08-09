@@ -10,10 +10,27 @@ import UIKit
 struct MeccaLocatorARView: View {
     let target: Mecca
 
+    @Environment(AppState.self) private var appState
     @Environment(LocationProvider.self) private var location
     @Environment(\.dismiss) private var dismiss
 
+    @State private var mapLoad: MapLoad = .idle
+    @State private var preciseState: PreciseMeccaARController.State = .relocalizing
+
     private static let arrivedRadiusMeters = 2.0
+
+    /// Whether the precise, world-map-based locate is available and loading.
+    private enum MapLoad {
+        case idle
+        case loading
+        case ready(ARWorldMap)
+        case gpsFallback
+    }
+
+    private var isPreciseMode: Bool {
+        if case .ready = mapLoad { return true }
+        return false
+    }
 
     private var targetCoordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude)
@@ -35,7 +52,7 @@ struct MeccaLocatorARView: View {
 
     var body: some View {
         ZStack {
-            LocatorARContainer(placement: placement)
+            arLayer
                 .ignoresSafeArea()
 
             LocatorCrosshair()
@@ -48,6 +65,39 @@ struct MeccaLocatorARView: View {
             .padding()
         }
         .preferredColorScheme(.dark)
+        .task { await MeccaEntityFactory.preload() }
+        .task { await loadWorldMap() }
+    }
+
+    @ViewBuilder
+    private var arLayer: some View {
+        switch mapLoad {
+        case .ready(let map):
+            LocatorPreciseARContainer(
+                worldMap: map,
+                appearance: target.appearance,
+                state: $preciseState
+            )
+        case .idle, .loading, .gpsFallback:
+            LocatorARContainer(placement: placement, appearance: target.appearance)
+        }
+    }
+
+    private func loadWorldMap() async {
+        guard target.hasWorldMap, case .idle = mapLoad else {
+            if !target.hasWorldMap { mapLoad = .gpsFallback }
+            return
+        }
+        mapLoad = .loading
+        do {
+            guard let data = try await appState.dependencies.meccas.worldMap(for: target.id) else {
+                mapLoad = .gpsFallback
+                return
+            }
+            mapLoad = .ready(try ARWorldMapArchiver.decode(data))
+        } catch {
+            mapLoad = .gpsFallback
+        }
     }
 
     private var topBar: some View {
@@ -92,6 +142,14 @@ struct MeccaLocatorARView: View {
     }
 
     private var hintText: String {
+        if case .loading = mapLoad {
+            return "Loading precise AR map…"
+        }
+        if isPreciseMode {
+            return preciseState == .located
+                ? "Found it — it's pinned exactly here"
+                : "Scan the area to lock on"
+        }
         guard let distance = liveDistance else { return "Finding your location…" }
         if distance <= Self.arrivedRadiusMeters {
             return "You've reached it!"
@@ -100,6 +158,11 @@ struct MeccaLocatorARView: View {
     }
 
     private var subHintText: String {
+        if isPreciseMode {
+            return preciseState == .located
+                ? "Your Mecca is shown at its exact real-world spot."
+                : "Slowly pan your phone across the area where you hid it until it locks on (centimeter-accurate)."
+        }
         guard let distance = liveDistance else {
             return "Move outside for a better GPS fix."
         }
@@ -131,6 +194,7 @@ private struct LocatorCrosshair: View {
 
 private struct LocatorARContainer: UIViewRepresentable {
     let placement: LocatorPlacement?
+    let appearance: MeccaAppearance
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -148,6 +212,7 @@ private struct LocatorARContainer: UIViewRepresentable {
                 bearingDegrees: placement.bearingDegrees,
                 distanceMeters: placement.distanceMeters,
                 freezeWithinMeters: 2.5,
+                appearance: appearance,
                 in: arView
             )
         }
@@ -168,6 +233,50 @@ private struct LocatorARContainer: UIViewRepresentable {
             configuration.planeDetection = [.horizontal]
             configuration.worldAlignment = .gravityAndHeading
             arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        }
+    }
+}
+
+/// Precise locate container: relocalizes against the Mecca's stored world map and
+/// renders it at its exact physical spot (no claiming).
+private struct LocatorPreciseARContainer: UIViewRepresentable {
+    let worldMap: ARWorldMap
+    let appearance: MeccaAppearance
+    @Binding var state: PreciseMeccaARController.State
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero)
+        arView.automaticallyConfigureSession = false
+        context.coordinator.arView = arView
+        context.coordinator.controller.onStateChange = { newState in
+            context.coordinator.parent.state = newState
+        }
+        context.coordinator.controller.start(
+            worldMap: worldMap,
+            appearance: appearance,
+            in: arView
+        )
+        return arView
+    }
+
+    func updateUIView(_ arView: ARView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
+        arView.session.pause()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: LocatorPreciseARContainer
+        weak var arView: ARView?
+        let controller = PreciseMeccaARController()
+
+        init(_ parent: LocatorPreciseARContainer) {
+            self.parent = parent
         }
     }
 }

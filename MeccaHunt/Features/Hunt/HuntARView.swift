@@ -18,12 +18,27 @@ struct HuntARView: View {
 
     @State private var didTapMecca = false
     @State private var claimState: ClaimState = .searching
+    @State private var mapLoad: MapLoad = .idle
+    @State private var preciseState: PreciseMeccaARController.State = .relocalizing
 
     private enum ClaimState: Equatable {
         case searching
         case claiming
         case claimed
         case failed(String)
+    }
+
+    /// Whether the precise, world-map-based hunt is available and loading.
+    private enum MapLoad {
+        case idle
+        case loading
+        case ready(ARWorldMap)
+        case gpsFallback
+    }
+
+    private var isPreciseMode: Bool {
+        if case .ready = mapLoad { return true }
+        return false
     }
 
     private var targetCoordinate: CLLocationCoordinate2D {
@@ -46,7 +61,7 @@ struct HuntARView: View {
 
     var body: some View {
         ZStack {
-            HuntARContainer(placement: placement, didTapMecca: $didTapMecca)
+            arLayer
                 .ignoresSafeArea()
 
             Crosshair()
@@ -63,8 +78,46 @@ struct HuntARView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .task { await MeccaEntityFactory.preload() }
+        .task { await loadWorldMap() }
         .onChange(of: didTapMecca) { _, tapped in
             if tapped { claim() }
+        }
+    }
+
+    @ViewBuilder
+    private var arLayer: some View {
+        switch mapLoad {
+        case .ready(let map):
+            HuntPreciseARContainer(
+                worldMap: map,
+                appearance: target.appearance,
+                didTapMecca: $didTapMecca,
+                state: $preciseState
+            )
+        case .idle, .loading, .gpsFallback:
+            HuntARContainer(
+                placement: placement,
+                appearance: target.appearance,
+                didTapMecca: $didTapMecca
+            )
+        }
+    }
+
+    private func loadWorldMap() async {
+        guard target.hasWorldMap, case .idle = mapLoad else {
+            if !target.hasWorldMap { mapLoad = .gpsFallback }
+            return
+        }
+        mapLoad = .loading
+        do {
+            guard let data = try await appState.dependencies.meccas.worldMap(for: target.id) else {
+                mapLoad = .gpsFallback
+                return
+            }
+            mapLoad = .ready(try ARWorldMapArchiver.decode(data))
+        } catch {
+            mapLoad = .gpsFallback
         }
     }
 
@@ -121,6 +174,14 @@ struct HuntARView: View {
     }
 
     private var hintText: String {
+        if case .loading = mapLoad {
+            return "Loading precise AR map…"
+        }
+        if isPreciseMode {
+            return preciseState == .located
+                ? "Locked on — tap the Mecca!"
+                : "Scan the area to lock on"
+        }
         guard let distance = liveDistance else {
             return "Finding your location…"
         }
@@ -131,6 +192,11 @@ struct HuntARView: View {
     }
 
     private var subHintText: String {
+        if isPreciseMode {
+            return preciseState == .located
+                ? "This Mecca is pinned to its exact real-world spot."
+                : "Slowly pan your phone across the area where it was hidden until it locks on (centimeter-accurate)."
+        }
         guard let distance = liveDistance else {
             return "Move outside for a better GPS fix."
         }
@@ -214,6 +280,7 @@ private struct Crosshair: View {
 
 private struct HuntARContainer: UIViewRepresentable {
     let placement: HuntPlacement?
+    let appearance: MeccaAppearance
     @Binding var didTapMecca: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -240,6 +307,7 @@ private struct HuntARContainer: UIViewRepresentable {
                 bearingDegrees: placement.bearingDegrees,
                 distanceMeters: placement.distanceMeters,
                 freezeWithinMeters: HuntTuning.hintUntilMeters,
+                appearance: appearance,
                 in: arView
             )
         }
@@ -274,6 +342,68 @@ private struct HuntARContainer: UIViewRepresentable {
             guard let tapped = arView.entity(at: point) else { return }
 
             if placer.contains(tapped) {
+                parent.didTapMecca = true
+            }
+        }
+    }
+}
+
+/// Precise hunt container: relocalizes against the Mecca's stored world map and
+/// renders it at its exact physical spot. Tapping it claims it.
+private struct HuntPreciseARContainer: UIViewRepresentable {
+    let worldMap: ARWorldMap
+    let appearance: MeccaAppearance
+    @Binding var didTapMecca: Bool
+    @Binding var state: PreciseMeccaARController.State
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero)
+        arView.automaticallyConfigureSession = false
+        context.coordinator.arView = arView
+
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        arView.addGestureRecognizer(tap)
+
+        context.coordinator.controller.onStateChange = { newState in
+            context.coordinator.parent.state = newState
+        }
+        context.coordinator.controller.start(
+            worldMap: worldMap,
+            appearance: appearance,
+            in: arView
+        )
+        return arView
+    }
+
+    func updateUIView(_ arView: ARView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
+        arView.session.pause()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: HuntPreciseARContainer
+        weak var arView: ARView?
+        let controller = PreciseMeccaARController()
+
+        init(_ parent: HuntPreciseARContainer) {
+            self.parent = parent
+        }
+
+        @objc
+        func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let arView else { return }
+            let point = recognizer.location(in: arView)
+            guard let tapped = arView.entity(at: point) else { return }
+            if controller.contains(tapped) {
                 parent.didTapMecca = true
             }
         }

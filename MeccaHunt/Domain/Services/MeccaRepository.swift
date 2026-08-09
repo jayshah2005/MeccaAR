@@ -13,6 +13,7 @@ protocol MeccaRepository: Sendable {
         ownerID: UUID,
         name: String,
         coordinate: GeoCoordinate,
+        appearance: MeccaAppearance,
         notBefore: Date
     ) async throws -> Mecca
 
@@ -35,6 +36,13 @@ protocol MeccaRepository: Sendable {
 
     /// Permanently remove a Mecca. Only its owner may delete it.
     func deleteMecca(id: UUID, ownerID: UUID) async throws
+
+    /// Store a serialized, compressed ARKit world map for centimeter-accurate
+    /// relocalization of this Mecca. Overwrites any existing map.
+    func uploadWorldMap(meccaID: UUID, compressedData: Data) async throws
+
+    /// Fetch the stored compressed world map for a Mecca, or nil if none exists.
+    func worldMap(for meccaID: UUID) async throws -> Data?
 }
 
 enum MeccaRepositoryError: LocalizedError {

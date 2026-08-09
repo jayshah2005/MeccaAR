@@ -16,6 +16,14 @@ create table if not exists meccas (
     latitude   double precision not null,
     longitude  double precision not null,
     altitude   double precision,
+    -- Owner-chosen appearance, persisted so the Mecca renders identically for
+    -- everyone who finds it. size in mm, rotations in degrees, tint 0..1 sRGB.
+    size_mm    double precision not null default 25,
+    x_rotation double precision not null default 0,
+    y_rotation double precision not null default 0,
+    tint_red   double precision not null default 1,
+    tint_green double precision not null default 1,
+    tint_blue  double precision not null default 1,
     created_at timestamptz not null default now(),
     state      text not null default 'active'
 );
@@ -27,6 +35,16 @@ create table if not exists hunt_claims (
     claimed_at    timestamptz not null default now(),
     awarded_points int not null default 100,
     unique (mecca_id, hunter_id)
+);
+
+-- Centimeter-accurate visual positioning. Each row stores a serialized,
+-- zlib-compressed ARKit ARWorldMap (base64 text) for one Mecca, letting a
+-- hunter's device relocalize to the exact spot it was hidden. GPS is only a
+-- coarse gate; this is what delivers cm-level accuracy.
+create table if not exists mecca_world_maps (
+    mecca_id   uuid primary key references meccas(id) on delete cascade,
+    data       text not null,
+    created_at timestamptz not null default now()
 );
 
 create index if not exists meccas_owner_idx on meccas(owner_id);

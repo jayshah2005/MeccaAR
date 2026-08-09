@@ -14,9 +14,16 @@ struct NeonMeccaRepository: MeccaRepository {
                 m.latitude as latitude,
                 m.longitude as longitude,
                 m.altitude as altitude,
+                m.size_mm as size_mm,
+                m.x_rotation as x_rotation,
+                m.y_rotation as y_rotation,
+                m.tint_red as tint_red,
+                m.tint_green as tint_green,
+                m.tint_blue as tint_blue,
                 extract(epoch from m.created_at) as created_at_epoch,
                 count(c.id)::int as claim_count,
-                coalesce(bool_or(c.hunter_id = $1::uuid), false)::int as claimed_by_me
+                coalesce(bool_or(c.hunter_id = $1::uuid), false)::int as claimed_by_me,
+                (exists (select 1 from mecca_world_maps w where w.mecca_id = m.id))::int as has_world_map
             from meccas m
             join users u on u.id = m.owner_id
             left join hunt_claims c on c.mecca_id = m.id
@@ -34,6 +41,7 @@ struct NeonMeccaRepository: MeccaRepository {
         ownerID: UUID,
         name: String,
         coordinate: GeoCoordinate,
+        appearance: MeccaAppearance,
         notBefore: Date
     ) async throws -> Mecca {
         // The insert only fires when no Mecca by this owner exists since
@@ -41,13 +49,20 @@ struct NeonMeccaRepository: MeccaRepository {
         let rows = try await client.execute(
             """
             with inserted as (
-                insert into meccas (owner_id, name, latitude, longitude, altitude)
-                select $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision
+                insert into meccas (
+                    owner_id, name, latitude, longitude, altitude,
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue
+                )
+                select
+                    $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision,
+                    $7::double precision, $8::double precision, $9::double precision,
+                    $10::double precision, $11::double precision, $12::double precision
                 where not exists (
                     select 1 from meccas
                     where owner_id = $1::uuid and created_at >= $6::timestamptz
                 )
-                returning id, owner_id, name, latitude, longitude, altitude, created_at
+                returning id, owner_id, name, latitude, longitude, altitude,
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue, created_at
             )
             select
                 i.id as id,
@@ -57,9 +72,16 @@ struct NeonMeccaRepository: MeccaRepository {
                 i.latitude as latitude,
                 i.longitude as longitude,
                 i.altitude as altitude,
+                i.size_mm as size_mm,
+                i.x_rotation as x_rotation,
+                i.y_rotation as y_rotation,
+                i.tint_red as tint_red,
+                i.tint_green as tint_green,
+                i.tint_blue as tint_blue,
                 extract(epoch from i.created_at) as created_at_epoch,
                 0 as claim_count,
-                0 as claimed_by_me
+                0 as claimed_by_me,
+                0 as has_world_map
             from inserted i
             join users u on u.id = i.owner_id;
             """,
@@ -69,7 +91,13 @@ struct NeonMeccaRepository: MeccaRepository {
                 .double(coordinate.latitude),
                 .double(coordinate.longitude),
                 .optionalDouble(coordinate.altitude),
-                .timestamp(notBefore)
+                .timestamp(notBefore),
+                .double(appearance.sizeMillimeters),
+                .double(appearance.xRotationDegrees),
+                .double(appearance.yRotationDegrees),
+                .double(appearance.red),
+                .double(appearance.green),
+                .double(appearance.blue)
             ]
         )
 
@@ -180,9 +208,16 @@ struct NeonMeccaRepository: MeccaRepository {
                 m.latitude as latitude,
                 m.longitude as longitude,
                 m.altitude as altitude,
+                m.size_mm as size_mm,
+                m.x_rotation as x_rotation,
+                m.y_rotation as y_rotation,
+                m.tint_red as tint_red,
+                m.tint_green as tint_green,
+                m.tint_blue as tint_blue,
                 extract(epoch from m.created_at) as created_at_epoch,
                 0 as claim_count,
-                0 as claimed_by_me
+                0 as claimed_by_me,
+                (exists (select 1 from mecca_world_maps w where w.mecca_id = m.id))::int as has_world_map
             from meccas m
             join users u on u.id = m.owner_id
             where m.owner_id = $1::uuid and m.state = 'active'
@@ -210,6 +245,30 @@ struct NeonMeccaRepository: MeccaRepository {
         }
     }
 
+    func uploadWorldMap(meccaID: UUID, compressedData: Data) async throws {
+        let base64 = compressedData.base64EncodedString()
+        _ = try await client.execute(
+            """
+            insert into mecca_world_maps (mecca_id, data)
+            values ($1::uuid, $2)
+            on conflict (mecca_id) do update
+                set data = excluded.data, created_at = now();
+            """,
+            [.uuid(meccaID), .text(base64)]
+        )
+    }
+
+    func worldMap(for meccaID: UUID) async throws -> Data? {
+        let rows = try await client.execute(
+            """
+            select data from mecca_world_maps where mecca_id = $1::uuid;
+            """,
+            [.uuid(meccaID)]
+        )
+        guard let base64 = rows.first?.string("data") else { return nil }
+        return Data(base64Encoded: base64)
+    }
+
     private static func mecca(from row: NeonRow) -> Mecca? {
         guard
             let id = row.uuid("id"),
@@ -233,9 +292,18 @@ struct NeonMeccaRepository: MeccaRepository {
                 longitude: longitude,
                 altitude: row.double("altitude")
             ),
+            appearance: MeccaAppearance(
+                sizeMillimeters: row.double("size_mm") ?? MeccaAppearance.default.sizeMillimeters,
+                xRotationDegrees: row.double("x_rotation") ?? 0,
+                yRotationDegrees: row.double("y_rotation") ?? 0,
+                red: row.double("tint_red") ?? 1,
+                green: row.double("tint_green") ?? 1,
+                blue: row.double("tint_blue") ?? 1
+            ),
             createdAt: createdAt,
             claimCount: row.int("claim_count") ?? 0,
-            claimedByMe: row.bool("claimed_by_me")
+            claimedByMe: row.bool("claimed_by_me"),
+            hasWorldMap: row.bool("has_world_map")
         )
     }
 }

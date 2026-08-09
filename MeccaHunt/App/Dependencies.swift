@@ -61,6 +61,7 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
         ownerID: UUID,
         name: String,
         coordinate: GeoCoordinate,
+        appearance: MeccaAppearance,
         notBefore: Date
     ) async throws -> Mecca { throw failure }
 
@@ -77,4 +78,8 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
     func meccasOwned(by ownerID: UUID) async throws -> [Mecca] { throw failure }
 
     func deleteMecca(id: UUID, ownerID: UUID) async throws { throw failure }
+
+    func uploadWorldMap(meccaID: UUID, compressedData: Data) async throws { throw failure }
+
+    func worldMap(for meccaID: UUID) async throws -> Data? { throw failure }
 }

@@ -7,22 +7,44 @@ enum MeccaEntityFactory {
     /// Scale 1 is a 30 mm character; the placement default of 0.5 is 15 mm.
     static let referenceHeightMeters: Float = 0.03
     private static var cachedTemplate: Entity?
+    private static var loadTask: Task<Entity, Never>?
 
     static func make() async -> Entity {
+        return await template().clone(recursive: true)
+    }
+
+    /// Warms the cached model template ahead of time so the first `make()` (e.g.
+    /// when a Mecca comes into frame) only pays for a cheap clone, not the full
+    /// asset load. Safe to call repeatedly; the load happens at most once.
+    static func preload() async {
+        _ = await template()
+    }
+
+    /// Returns the shared, prepared template, loading it once and caching it.
+    private static func template() async -> Entity {
         if let cachedTemplate {
-            return cachedTemplate.clone(recursive: true)
+            return cachedTemplate
         }
 
-        let template: Entity
-        do {
-            let imported = try await loadImportedModel()
-            template = prepare(imported)
-        } catch {
-            template = makeProceduralFallback()
+        // Coalesce concurrent callers onto a single in-flight load so multiple
+        // Meccas appearing at once don't each import the asset.
+        if let loadTask {
+            return await loadTask.value
         }
 
+        let task = Task { () -> Entity in
+            do {
+                let imported = try await loadImportedModel()
+                return prepare(imported)
+            } catch {
+                return makeProceduralFallback()
+            }
+        }
+        loadTask = task
+        let template = await task.value
         cachedTemplate = template
-        return template.clone(recursive: true)
+        loadTask = nil
+        return template
     }
 
     private static func loadImportedModel() async throws -> Entity {
@@ -142,6 +164,39 @@ enum MeccaEntityFactory {
         content.scale = SIMD3<Float>(repeating: fallbackScale)
         root.generateCollisionShapes(recursive: true)
         return root
+    }
+
+    /// The scale factor that renders a Mecca at the given real-world height.
+    static func scale(forMillimeters millimeters: Double) -> Float {
+        Float(millimeters / Double(referenceHeightMeters * 1_000))
+    }
+
+    /// Applies a saved appearance (size, rotation, color) to a Mecca entity so it
+    /// looks identical wherever it is rendered. Pass `displayScale` to override
+    /// the real-world size (e.g. to keep a distant GPS marker visible).
+    static func apply(
+        _ appearance: MeccaAppearance,
+        to entity: Entity,
+        displayScale: Float? = nil
+    ) {
+        let scale = displayScale ?? scale(forMillimeters: appearance.sizeMillimeters)
+        entity.scale = [scale, scale, scale]
+
+        let xRadians = Float(appearance.xRotationDegrees) * .pi / 180
+        let yRadians = Float(appearance.yRotationDegrees) * .pi / 180
+        entity.orientation =
+            simd_quatf(angle: yRadians, axis: [0, 1, 0])
+            * simd_quatf(angle: xRadians, axis: [1, 0, 0])
+
+        applyColor(
+            UIColor(
+                red: CGFloat(appearance.red),
+                green: CGFloat(appearance.green),
+                blue: CGFloat(appearance.blue),
+                alpha: 1
+            ),
+            to: entity
+        )
     }
 
     static func applyColor(_ color: UIColor, to entity: Entity) {

@@ -18,7 +18,11 @@ struct PlacementView: View {
     @State private var isSaving = false
     @State private var saveError: String?
     @State private var didSave = false
+    @State private var didSaveWithMap = false
     @State private var alreadyPlacedToday = false
+    @State private var saveStatus = "Save to map"
+    @State private var arSession = PlacementARSession()
+    @State private var mappingQuality: ARFrame.WorldMappingStatus = .notAvailable
 
     private var configuration: MeccaPlacementConfiguration {
         let referenceMillimeters = Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
@@ -30,13 +34,28 @@ struct PlacementView: View {
         )
     }
 
+    /// The persisted appearance for the Mecca being saved, so it renders with
+    /// the same color, size, and rotation for everyone who finds it.
+    private var appearance: MeccaAppearance {
+        let tint = MeccaTint(color: tintColor)
+        return MeccaAppearance(
+            sizeMillimeters: sizeMillimeters,
+            xRotationDegrees: xRotationDegrees,
+            yRotationDegrees: yRotationDegrees,
+            red: tint.red,
+            green: tint.green,
+            blue: tint.blue
+        )
+    }
+
     var body: some View {
         ZStack {
             PlacementARView(
                 placementCount: $placementCount,
                 resetToken: resetToken,
                 message: $message,
-                configuration: configuration
+                configuration: configuration,
+                session: arSession
             )
             .ignoresSafeArea()
 
@@ -161,9 +180,18 @@ struct PlacementView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .task { await MeccaEntityFactory.preload() }
         .task {
             location.start()
             await checkDailyLimit()
+        }
+        .task {
+            // Poll ARKit's world-mapping status so we can tell the user when the
+            // captured area is rich enough for precise relocalization.
+            while !Task.isCancelled {
+                mappingQuality = arSession.currentMappingStatus()
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
         }
     }
 
@@ -179,14 +207,14 @@ struct PlacementView: View {
                     .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
 
                 Label(
-                    "Hold your phone right where the Mecca is and keep still while saving — this records its exact spot.",
-                    systemImage: "hand.raised.fill"
+                    "Slowly look around the Mecca from a few angles first, then keep still and save. This records a precise AR map of the spot.",
+                    systemImage: "arkit"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                accuracyLabel
+                mappingQualityLabel
 
                 if let saveError {
                     Label(saveError, systemImage: "exclamationmark.triangle.fill")
@@ -197,7 +225,7 @@ struct PlacementView: View {
                 Button(action: save) {
                     HStack {
                         if isSaving { ProgressView().tint(.black) }
-                        Text(isSaving ? "Locking GPS — hold still…" : "Save to map")
+                        Text(isSaving ? saveStatus : "Save to map")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                     }
@@ -211,21 +239,22 @@ struct PlacementView: View {
     }
 
     @ViewBuilder
-    private var accuracyLabel: some View {
-        if let accuracy = location.horizontalAccuracy {
-            let tint: Color = accuracy <= 10 ? .mint : (accuracy <= 25 ? .yellow : .orange)
-            Label("GPS accuracy ±\(Int(accuracy.rounded())) m", systemImage: "dot.scope")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(tint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Label("Waiting for GPS fix…", systemImage: "location.slash")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var mappingQualityLabel: some View {
+        let (text, symbol, tint): (String, String, Color) = switch mappingQuality {
+        case .mapped:
+            ("AR map ready — precise find enabled", "checkmark.circle.fill", .mint)
+        case .extending:
+            ("Good AR coverage — a bit more helps", "circle.lefthalf.filled", .yellow)
+        default:
+            ("Look around the Mecca to build the AR map", "arkit", .orange)
         }
+        Label(text, systemImage: symbol)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
     private var dailyLimitNote: some View {
         Label(
             "You've already hidden a Mecca today. Come back tomorrow!",
@@ -246,7 +275,9 @@ struct PlacementView: View {
                     .foregroundStyle(.mint)
                 Text("Mecca hidden!")
                     .font(.largeTitle.bold())
-                Text("It's now on the map for other hunters to find.")
+                Text(didSaveWithMap
+                    ? "Saved with a precise AR map — hunters can lock onto its exact spot."
+                    : "Saved with GPS only. Look around next time to enable centimeter-accurate finding.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -298,9 +329,16 @@ struct PlacementView: View {
 
         saveError = nil
         isSaving = true
+        didSaveWithMap = false
         Task {
-            // Sample GPS for a few seconds and average the best fixes so the
-            // recorded coordinate is as precise as possible.
+            // Capture the AR world map first, while the user is still holding the
+            // phone at the Mecca. This is what enables centimeter-accurate finding.
+            saveStatus = "Capturing AR map — hold still…"
+            let worldMapData = await arSession.captureWorldMap()
+
+            // Sample GPS for a few seconds too, as a coarse gate so hunters know
+            // when they're close enough to start scanning.
+            saveStatus = "Locking GPS — hold still…"
             guard let fix = await location.captureBestLocation(seconds: 4) else {
                 saveError = "Couldn't get a GPS fix. Try again near a window or outdoors."
                 isSaving = false
@@ -313,12 +351,28 @@ struct PlacementView: View {
                 altitude: altitude
             )
             do {
-                _ = try await appState.dependencies.meccas.createMecca(
+                saveStatus = "Saving…"
+                let mecca = try await appState.dependencies.meccas.createMecca(
                     ownerID: owner.id,
                     name: name,
                     coordinate: coordinate,
+                    appearance: appearance,
                     notBefore: notBefore
                 )
+                if let worldMapData {
+                    saveStatus = "Uploading AR map…"
+                    do {
+                        try await appState.dependencies.meccas.uploadWorldMap(
+                            meccaID: mecca.id,
+                            compressedData: worldMapData
+                        )
+                        didSaveWithMap = true
+                    } catch {
+                        // The Mecca is saved with GPS; precise map upload is a
+                        // best-effort bonus, so don't fail the whole save.
+                        didSaveWithMap = false
+                    }
+                }
                 didSave = true
             } catch MeccaRepositoryError.dailyLimitReached {
                 alreadyPlacedToday = true
@@ -328,6 +382,32 @@ struct PlacementView: View {
                     ?? error.localizedDescription
             }
             isSaving = false
+        }
+    }
+}
+
+/// Shared handle to the placement AR session so `PlacementView` can capture the
+/// world map and read mapping quality without owning the `ARView` directly.
+@MainActor
+final class PlacementARSession {
+    weak var arView: ARView?
+
+    func currentMappingStatus() -> ARFrame.WorldMappingStatus {
+        arView?.session.currentFrame?.worldMappingStatus ?? .notAvailable
+    }
+
+    /// Asks ARKit for the current world map and returns it archived + compressed,
+    /// or nil if a usable map isn't available yet.
+    func captureWorldMap() async -> Data? {
+        guard let session = arView?.session else { return nil }
+        return await withCheckedContinuation { continuation in
+            session.getCurrentWorldMap { map, _ in
+                guard let map else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: try? ARWorldMapArchiver.encode(map))
+            }
         }
     }
 }
@@ -495,6 +575,7 @@ private struct PlacementARView: UIViewRepresentable {
     let resetToken: Int
     @Binding var message: String
     let configuration: MeccaPlacementConfiguration
+    let session: PlacementARSession
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -504,6 +585,7 @@ private struct PlacementARView: UIViewRepresentable {
         let arView = ARView(frame: .zero)
         arView.automaticallyConfigureSession = false
         context.coordinator.arView = arView
+        session.arView = arView
 
         let tap = UITapGestureRecognizer(
             target: context.coordinator,
@@ -551,6 +633,9 @@ private struct PlacementARView: UIViewRepresentable {
         private var placedMeccas: [PlacedMecca] = []
         private var lastResetToken: Int
         private var lastAppliedConfiguration: MeccaPlacementConfiguration?
+        /// The session-tracked anchor persisted into the world map for precise
+        /// relocalization. Only the most recent placement is kept.
+        private var persistedAnchor: ARAnchor?
 
         init(_ parent: PlacementARView) {
             self.parent = parent
@@ -606,6 +691,18 @@ private struct PlacementARView: UIViewRepresentable {
             let placementConfiguration = parent.configuration
             parent.message = "Loading Mecca…"
 
+            // Persist a named session anchor at the same spot so it is captured
+            // in the world map and can be relocalized later to the exact cm.
+            if let existing = persistedAnchor {
+                arView.session.remove(anchor: existing)
+            }
+            let worldAnchor = ARAnchor(
+                name: PreciseMeccaARController.anchorName,
+                transform: anchorTransform
+            )
+            arView.session.add(anchor: worldAnchor)
+            persistedAnchor = worldAnchor
+
             Task { @MainActor [weak self] in
                 guard let self, let arView = self.arView else { return }
 
@@ -630,6 +727,10 @@ private struct PlacementARView: UIViewRepresentable {
             guard resetToken != lastResetToken else { return }
             placedMeccas.forEach { $0.anchor.removeFromParent() }
             placedMeccas.removeAll()
+            if let existing = persistedAnchor {
+                arView?.session.remove(anchor: existing)
+                persistedAnchor = nil
+            }
             lastResetToken = resetToken
             lastAppliedConfiguration = nil
         }

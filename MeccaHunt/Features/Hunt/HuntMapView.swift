@@ -32,6 +32,7 @@ struct HuntMapView: View {
         .sheet(isPresented: $showLeaderboard) {
             LeaderboardView()
         }
+        .task { await MeccaEntityFactory.preload() }
         .task {
             if model == nil {
                 model = HuntViewModel(repository: appState.dependencies.meccas)
