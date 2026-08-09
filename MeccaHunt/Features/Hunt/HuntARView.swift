@@ -20,6 +20,7 @@ struct HuntARView: View {
     @State private var claimState: ClaimState = .searching
     @State private var mapLoad: MapLoad = .idle
     @State private var preciseState: PreciseMeccaARController.State = .relocalizing
+    @State private var awardedPoints = 0
 
     private enum ClaimState: Equatable {
         case searching
@@ -220,7 +221,7 @@ struct HuntARView: View {
                     .foregroundStyle(.mint)
                 Text("Mecca hunted!")
                     .font(.largeTitle.bold())
-                Text("+\(HuntTuning.awardedPoints) points for finding \(target.name).")
+                Text("+\(awardedPoints) points for finding \(target.name).")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -243,11 +244,11 @@ struct HuntARView: View {
         claimState = .claiming
         Task {
             do {
-                _ = try await appState.dependencies.meccas.claim(
+                let claim = try await appState.dependencies.meccas.claim(
                     meccaID: target.id,
-                    hunterID: hunterID,
-                    awardedPoints: HuntTuning.awardedPoints
+                    hunterID: hunterID
                 )
+                awardedPoints = claim.awardedPoints
                 claimState = .claimed
             } catch {
                 claimState = .failed(

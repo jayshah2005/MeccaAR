@@ -55,6 +55,8 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
 
     func signIn(username: String) async throws -> User { throw failure }
 
+    func deleteAccount(userID: UUID) async throws { throw failure }
+
     func allMeccas(hunterID: UUID) async throws -> [Mecca] { throw failure }
 
     func createMecca(
@@ -69,11 +71,12 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
 
     func claim(
         meccaID: UUID,
-        hunterID: UUID,
-        awardedPoints: Int
+        hunterID: UUID
     ) async throws -> HuntClaim { throw failure }
 
-    func leaderboard() async throws -> [LeaderboardEntry] { throw failure }
+    func hunterLeaderboard(period: LeaderboardPeriod) async throws -> [LeaderboardEntry] { throw failure }
+
+    func overallLeaderboard() async throws -> [LeaderboardEntry] { throw failure }
 
     func meccasOwned(by ownerID: UUID) async throws -> [Mecca] { throw failure }
 

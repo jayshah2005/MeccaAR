@@ -111,11 +111,8 @@ final class HuntViewModel {
         }
     }
 
-    func claim(_ mecca: Mecca, hunterID: UUID) async throws {
-        _ = try await repository.claim(
-            meccaID: mecca.id,
-            hunterID: hunterID,
-            awardedPoints: HuntTuning.awardedPoints
-        )
+    @discardableResult
+    func claim(_ mecca: Mecca, hunterID: UUID) async throws -> HuntClaim {
+        try await repository.claim(meccaID: mecca.id, hunterID: hunterID)
     }
 }

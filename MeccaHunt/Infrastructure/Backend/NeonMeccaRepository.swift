@@ -28,6 +28,7 @@ struct NeonMeccaRepository: MeccaRepository {
             join users u on u.id = m.owner_id
             left join hunt_claims c on c.mecca_id = m.id
             where m.state = 'active'
+              and m.created_at >= now() - interval '30 days'
             group by m.id, u.username
             order by m.created_at desc;
             """,
@@ -121,23 +122,35 @@ struct NeonMeccaRepository: MeccaRepository {
 
     func claim(
         meccaID: UUID,
-        hunterID: UUID,
-        awardedPoints: Int
+        hunterID: UUID
     ) async throws -> HuntClaim {
-        // `target` only matches an active Mecca owned by someone else, so an
-        // empty result means it's your own, already found, or missing. The
-        // Mecca is flagged `claimed` so it disappears from everyone's map, while
-        // the claim row is kept for the leaderboard.
+        // `target` only matches an active, non-expired Mecca owned by someone
+        // else, so an empty result means it's your own, already found, expired,
+        // or missing. The awarded points are the Mecca's current age-based value.
+        // The Mecca is flagged `claimed` so it disappears from everyone's map,
+        // while the claim row is kept for the leaderboard.
         let rows = try await client.execute(
             """
             with target as (
-                select id from meccas
+                select id, created_at from meccas
                 where id = $1::uuid and owner_id <> $2::uuid and state = 'active'
+                  and created_at >= now() - interval '30 days'
+            ),
+            scored as (
+                select id,
+                    case
+                        when now() - created_at >= interval '30 days' then 500
+                        when now() - created_at >= interval '20 days' then 300
+                        when now() - created_at >= interval '10 days' then 200
+                        else 100
+                    end as points
+                from target
             ),
             ins as (
                 insert into hunt_claims (mecca_id, hunter_id, awarded_points)
-                select id, $2::uuid, $3::int from target
-                on conflict (mecca_id, hunter_id) do update set claimed_at = now()
+                select id, $2::uuid, points from scored
+                on conflict (mecca_id, hunter_id) do update
+                    set claimed_at = now(), awarded_points = excluded.awarded_points
                 returning mecca_id, hunter_id,
                     extract(epoch from claimed_at) as claimed_at_epoch, awarded_points
             ),
@@ -148,7 +161,7 @@ struct NeonMeccaRepository: MeccaRepository {
             )
             select mecca_id, hunter_id, claimed_at_epoch, awarded_points from ins;
             """,
-            [.uuid(meccaID), .uuid(hunterID), .int(awardedPoints)]
+            [.uuid(meccaID), .uuid(hunterID)]
         )
 
         guard
@@ -164,11 +177,43 @@ struct NeonMeccaRepository: MeccaRepository {
             meccaID: meccaID,
             hunterID: hunterID,
             claimedAt: claimedAt,
-            awardedPoints: row.int("awarded_points") ?? awardedPoints
+            awardedPoints: row.int("awarded_points") ?? 0
         )
     }
 
-    func leaderboard() async throws -> [LeaderboardEntry] {
+    func hunterLeaderboard(period: LeaderboardPeriod) async throws -> [LeaderboardEntry] {
+        // `period.sqlInterval` is a fixed, enum-controlled literal (never user
+        // input), so interpolating it here is safe.
+        let rows = try await client.execute(
+            """
+            select
+                u.id as id,
+                u.username as username,
+                sum(c.awarded_points)::int as points,
+                count(c.id)::int as finds
+            from hunt_claims c
+            join users u on u.id = c.hunter_id
+            where c.claimed_at >= now() - interval '\(period.sqlInterval)'
+            group by u.id, u.username
+            order by points desc, u.username asc;
+            """
+        )
+
+        return rows.compactMap { row in
+            guard
+                let id = row.uuid("id"),
+                let username = row.string("username")
+            else { return nil }
+            return LeaderboardEntry(
+                id: id,
+                username: username,
+                points: row.int("points") ?? 0,
+                finds: row.int("finds") ?? 0
+            )
+        }
+    }
+
+    func overallLeaderboard() async throws -> [LeaderboardEntry] {
         let rows = try await client.execute(
             """
             select
@@ -221,6 +266,7 @@ struct NeonMeccaRepository: MeccaRepository {
             from meccas m
             join users u on u.id = m.owner_id
             where m.owner_id = $1::uuid and m.state = 'active'
+              and m.created_at >= now() - interval '30 days'
             order by m.created_at desc;
             """,
             [.uuid(ownerID)]

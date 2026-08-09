@@ -15,7 +15,6 @@ struct PlacementView: View {
     @State private var yRotationDegrees = 0.0
     @State private var tintColor = Color.white
     @State private var isToolbarMinimized = false
-    @State private var meccaName = ""
     @State private var isSaving = false
     @State private var saveError: String?
     @State private var didSave = false
@@ -99,7 +98,7 @@ struct PlacementView: View {
 
                 Spacer()
 
-                placeButton
+                placeHint
 
                 VStack(spacing: 10) {
                     HStack(spacing: 12) {
@@ -113,6 +112,9 @@ struct PlacementView: View {
                             Text(message)
                                 .font(.subheadline.weight(.semibold))
                                 .multilineTextAlignment(.leading)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         Spacer()
@@ -138,10 +140,13 @@ struct PlacementView: View {
                     }
 
                     if !isToolbarMinimized {
-                        Text("Point the reticle at a floor, table, or wall. When it turns green, tap Place Mecca.")
+                        Text("Line up the center reticle on a floor, table, or wall. When it turns green, tap anywhere to place your Mecca there.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity)
 
                         HStack {
                             Label("\(placementCount) placed", systemImage: "mappin.and.ellipse")
@@ -227,25 +232,33 @@ struct PlacementView: View {
         }
     }
 
-    private var placeButton: some View {
-        Button {
-            placeToken += 1
-        } label: {
-            Label(canPlace ? "Place Mecca" : "Scanning for a surface…",
-                  systemImage: canPlace ? "plus.viewfinder" : "viewfinder")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+    private var placeHintText: String {
+        if placementCount > 0 {
+            return "Tap another spot to move your Mecca"
         }
-        .buttonStyle(.borderedProminent)
-        .tint(canPlace ? .mint : .gray)
-        .disabled(!canPlace)
-        .opacity(canPlace ? 1 : 0.55)
-        .padding(.horizontal, 8)
-        .animation(.easeInOut(duration: 0.2), value: canPlace)
-        .accessibilityHint(canPlace
-            ? "Places a Mecca where the reticle is pointing"
-            : "Move your phone to scan a surface before placing")
+        return canPlace
+            ? "Reticle locked — tap to place your Mecca"
+            : "Move your phone slowly to scan a surface…"
+    }
+
+    private var placeHint: some View {
+        Label(placeHintText, systemImage: canPlace ? "hand.tap.fill" : "viewfinder")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(canPlace ? .black : .white)
+            .multilineTextAlignment(.center)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(
+                (canPlace ? Color.mint.opacity(0.95) : Color.black.opacity(0.5)),
+                in: RoundedRectangle(cornerRadius: 22)
+            )
+            .padding(.horizontal, 24)
+            .animation(.easeInOut(duration: 0.2), value: canPlace)
+            .accessibilityHint(canPlace
+                ? "Tap anywhere on the surface to place a Mecca there"
+                : "Move your phone to scan a surface before placing")
     }
 
     @ViewBuilder
@@ -254,17 +267,14 @@ struct PlacementView: View {
             dailyLimitNote
         } else {
             VStack(spacing: 10) {
-                TextField("Name this Mecca", text: $meccaName)
-                    .textInputAutocapitalization(.words)
-                    .padding(10)
-                    .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
-
                 Label(
-                    "Slowly look around the Mecca from a few angles first, then keep still and save. This records a precise AR map of the spot.",
-                    systemImage: "arkit"
+                    "Keep your phone close to the Mecca and slowly scan around it from a few angles, then hold still and save — this records its exact spot so hunters can find it.",
+                    systemImage: "dot.viewfinder"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 mappingQualityLabel
@@ -304,6 +314,8 @@ struct PlacementView: View {
         Label(text, systemImage: symbol)
             .font(.caption.weight(.semibold))
             .foregroundStyle(tint)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -372,8 +384,7 @@ struct PlacementView: View {
     private func save() {
         guard !isSaving, !alreadyPlacedToday, let owner = appState.currentUser else { return }
 
-        let trimmed = meccaName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = trimmed.isEmpty ? "\(owner.username)'s Mecca" : trimmed
+        let name = "\(owner.username)'s Mecca"
         // Exempt users pass a future cutoff so the "already placed since" guard
         // never matches, allowing unlimited placements.
         let notBefore = isDailyLimitExempt
@@ -879,7 +890,7 @@ private struct PlacementARView: UIViewRepresentable {
             parent.canPlace = value
             if placedMeccas.isEmpty {
                 parent.message = value
-                    ? "Surface found — tap Place Mecca"
+                    ? "Surface found — tap the floor to place your Mecca"
                     : "Move your phone slowly to scan a surface"
             }
         }
@@ -888,7 +899,13 @@ private struct PlacementARView: UIViewRepresentable {
         /// mapped planes, their infinite extensions, and rough estimates.
         private func bestSurfaceHit() -> SurfaceHit? {
             guard let arView else { return nil }
-            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            return surfaceHit(at: CGPoint(x: arView.bounds.midX, y: arView.bounds.midY))
+        }
+
+        /// Raycasts from a screen point to the nearest surface, trying looser
+        /// targets in turn so placement works even on low-texture walls/floors.
+        private func surfaceHit(at point: CGPoint) -> SurfaceHit? {
+            guard let arView else { return nil }
             let targets: [ARRaycastQuery.Target] = [
                 .existingPlaneGeometry,
                 .existingPlaneInfinite,
@@ -896,7 +913,7 @@ private struct PlacementARView: UIViewRepresentable {
             ]
             for target in targets {
                 if let result = arView.raycast(
-                    from: center,
+                    from: point,
                     allowing: target,
                     alignment: .any
                 ).first {
@@ -916,17 +933,20 @@ private struct PlacementARView: UIViewRepresentable {
 
         @objc
         func handleTap(_: UITapGestureRecognizer) {
-            place()
+            // Always place at the center reticle's hit. It resolves against
+            // LiDAR plane geometry first, so it's far more accurate than a
+            // raycast from an arbitrary finger location.
+            place(at: latestHit)
         }
 
         func handlePlaceToken(_ token: Int) {
             guard token != lastPlaceToken else { return }
             lastPlaceToken = token
-            place()
+            place(at: latestHit)
         }
 
-        private func place() {
-            guard let arView, let hit = latestHit else {
+        private func place(at hit: SurfaceHit?) {
+            guard let arView, let hit else {
                 parent.message = "No surface found yet — keep scanning and try again"
                 return
             }

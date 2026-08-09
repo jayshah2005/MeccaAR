@@ -205,13 +205,22 @@ enum MeccaEntityFactory {
 
         if let modelEntity = entity as? ModelEntity,
            var model = modelEntity.model {
-            model.materials = [
-                SimpleMaterial(
-                    color: color,
-                    roughness: 0.82,
-                    isMetallic: false
+            let tinted = SimpleMaterial(
+                color: color,
+                roughness: 0.82,
+                isMetallic: false
+            )
+            // Recolor every material slot the mesh uses. Replacing the whole
+            // array with a single material would leave multi-material meshes
+            // only partially tinted (the source of the color picker glitch).
+            if model.materials.isEmpty {
+                model.materials = [tinted]
+            } else {
+                model.materials = Array(
+                    repeating: tinted,
+                    count: model.materials.count
                 )
-            ]
+            }
             modelEntity.model = model
         }
 
