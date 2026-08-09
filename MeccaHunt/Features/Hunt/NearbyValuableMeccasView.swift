@@ -8,6 +8,8 @@ struct NearbyValuableMeccasView: View {
     let candidates: [NearbyMecca]
     let hasLocation: Bool
     let onHunt: (Mecca) -> Void
+    /// Centers the map on the Mecca and opens its pin details.
+    let onShowLocation: (Mecca) -> Void
 
     /// Rank by value first (rarer, longer-hidden Meccas float to the top), then
     /// by how close they are.
@@ -27,12 +29,12 @@ struct NearbyValuableMeccasView: View {
                     ContentUnavailableView(
                         "Finding your location…",
                         systemImage: "location.magnifyingglass",
-                        description: Text("We need your location to show what's valuable nearby.")
+                        description: Text("We need your location to show valuable Meccas nearby.")
                     )
                 } else if ranked.isEmpty {
                     ContentUnavailableView(
-                        "Nothing valuable nearby",
-                        systemImage: "sparkle.magnifyingglass",
+                        "No valuable Meccas nearby",
+                        systemImage: "figure.stand",
                         description: Text("Walk around — Meccas are worth more the longer they've hidden.")
                     )
                 } else {
@@ -40,7 +42,7 @@ struct NearbyValuableMeccasView: View {
                 }
             }
             .background(Color.black)
-            .navigationTitle("Valuable Nearby")
+            .navigationTitle("Valuable Mecca Nearby")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -54,10 +56,17 @@ struct NearbyValuableMeccasView: View {
     private var list: some View {
         List {
             ForEach(ranked) { candidate in
-                NearbyValuableRow(candidate: candidate) {
-                    onHunt(candidate.mecca)
-                    dismiss()
-                }
+                NearbyValuableRow(
+                    candidate: candidate,
+                    onShowLocation: {
+                        onShowLocation(candidate.mecca)
+                        dismiss()
+                    },
+                    onHunt: {
+                        onHunt(candidate.mecca)
+                        dismiss()
+                    }
+                )
                 .listRowBackground(Color.white.opacity(0.06))
             }
         }
@@ -92,6 +101,7 @@ enum RarityStyle {
 
 private struct NearbyValuableRow: View {
     let candidate: NearbyMecca
+    let onShowLocation: () -> Void
     let onHunt: () -> Void
 
     private var mecca: Mecca { candidate.mecca }
@@ -99,27 +109,35 @@ private struct NearbyValuableRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(RarityStyle.color(tier).opacity(0.22))
-                    .frame(width: 38, height: 38)
-                Image(systemName: RarityStyle.symbol(tier))
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(RarityStyle.color(tier))
-            }
+            Button(action: onShowLocation) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        Circle()
+                            .fill(RarityStyle.color(tier).opacity(0.22))
+                            .frame(width: 38, height: 38)
+                        Image(systemName: RarityStyle.symbol(tier))
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(RarityStyle.color(tier))
+                    }
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(mecca.name)
-                    .font(.headline)
-                Text("\(tier.label) · \(mecca.daysHidden)d hidden · by \(mecca.ownerUsername)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(proximityText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(mecca.name)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text("\(tier.label) · \(mecca.daysHidden)d hidden · by \(mecca.ownerUsername)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(proximityText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
 
-            Spacer()
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Show on map")
 
             VStack(alignment: .trailing, spacing: 6) {
                 Text("\(mecca.currentPoints)")
@@ -129,6 +147,12 @@ private struct NearbyValuableRow: View {
                     Button("Hunt", action: onHunt)
                         .font(.caption.weight(.bold))
                         .buttonStyle(.borderedProminent)
+                        .tint(.mint)
+                        .controlSize(.small)
+                } else {
+                    Button("Map", action: onShowLocation)
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.bordered)
                         .tint(.mint)
                         .controlSize(.small)
                 }

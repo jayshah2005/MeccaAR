@@ -1,22 +1,13 @@
 import SwiftUI
 
-/// Two hunting leaderboards: Hunters ranked by points earned in a time window,
-/// and Overall all-time standings.
+/// Hunter leaderboard ranked by points earned over a chosen time window.
 struct LeaderboardView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
-    @State private var board: Board = .hunters
     @State private var period: LeaderboardPeriod = .week
     @State private var entries: [LeaderboardEntry] = []
     @State private var loadState: LoadState = .loading
-
-    private enum Board: String, CaseIterable, Identifiable {
-        case hunters
-        case overall
-        var id: String { rawValue }
-        var title: String { self == .hunters ? "Hunters" : "Overall" }
-    }
 
     private enum LoadState: Equatable {
         case loading
@@ -24,25 +15,14 @@ struct LeaderboardView: View {
         case failed(String)
     }
 
-    private var reloadKey: String { "\(board.rawValue)-\(period.rawValue)" }
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("Leaderboard", selection: $board) {
-                    ForEach(Board.allCases) { Text($0.title).tag($0) }
+                Picker("Period", selection: $period) {
+                    ForEach(LeaderboardPeriod.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .padding()
-
-                if board == .hunters {
-                    Picker("Period", selection: $period) {
-                        ForEach(LeaderboardPeriod.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                }
 
                 content
             }
@@ -56,7 +36,7 @@ struct LeaderboardView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .task(id: reloadKey) { await load() }
+        .task(id: period) { await load() }
     }
 
     @ViewBuilder
@@ -71,9 +51,9 @@ struct LeaderboardView: View {
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
             )
-        case .loaded where entries.allSatisfy({ $0.points == 0 }):
+        case .loaded where entries.isEmpty:
             ContentUnavailableView(
-                board == .hunters ? "No hunts this \(periodNoun)" : "No hunts yet",
+                "No hunts \(periodNoun)",
                 systemImage: "trophy",
                 description: Text("Find a Mecca to score points.")
             )
@@ -84,7 +64,7 @@ struct LeaderboardView: View {
 
     private var list: some View {
         List {
-            ForEach(Array(rankedEntries.enumerated()), id: \.element.id) { index, entry in
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 HunterRow(
                     rank: index + 1,
                     entry: entry,
@@ -97,29 +77,20 @@ struct LeaderboardView: View {
         .background(Color.black)
     }
 
-    /// The overall board lists everyone; hide the 0-point tail so it stays tidy.
-    private var rankedEntries: [LeaderboardEntry] {
-        board == .overall ? entries.filter { $0.points > 0 } : entries
-    }
-
     private var periodNoun: String {
         switch period {
-        case .week: return "week"
-        case .month: return "month"
-        case .year: return "year"
+        case .week: return "this week"
+        case .month: return "this month"
+        case .year: return "this year"
+        case .allTime: return "yet"
         }
     }
 
     private func load() async {
         loadState = .loading
         do {
-            switch board {
-            case .hunters:
-                entries = try await appState.dependencies.meccas
-                    .hunterLeaderboard(period: period)
-            case .overall:
-                entries = try await appState.dependencies.meccas.overallLeaderboard()
-            }
+            entries = try await appState.dependencies.meccas
+                .hunterLeaderboard(period: period)
             loadState = .loaded
         } catch {
             loadState = .failed(

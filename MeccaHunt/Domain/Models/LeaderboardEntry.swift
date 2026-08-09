@@ -13,6 +13,7 @@ enum LeaderboardPeriod: String, CaseIterable, Identifiable, Sendable {
     case week
     case month
     case year
+    case allTime
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum LeaderboardPeriod: String, CaseIterable, Identifiable, Sendable {
         case .week: return "Weekly"
         case .month: return "Monthly"
         case .year: return "Yearly"
+        case .allTime: return "All Time"
         }
     }
 
@@ -31,6 +33,7 @@ enum LeaderboardPeriod: String, CaseIterable, Identifiable, Sendable {
         case .week: return "7 days"
         case .month: return "30 days"
         case .year: return "365 days"
+        case .allTime: return "100 years"
         }
     }
 }

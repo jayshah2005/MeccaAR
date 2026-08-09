@@ -50,7 +50,8 @@ struct HuntMapView: View {
             NearbyValuableMeccasView(
                 candidates: valuableNearby,
                 hasLocation: location.currentLocation != nil,
-                onHunt: { openHunt(for: $0) }
+                onHunt: { openHunt(for: $0) },
+                onShowLocation: { showLocation(of: $0) }
             )
             .presentationDetents([.medium, .large])
         }
@@ -169,14 +170,14 @@ struct HuntMapView: View {
             Button {
                 showValuableNearby = true
             } label: {
-                Label("Valuable nearby", systemImage: "sparkles")
+                Label("Valuable Mecca nearby", systemImage: "figure.stand")
                     .labelStyle(.iconOnly)
                     .font(.headline)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.borderedProminent)
             .tint(.black.opacity(0.6))
-            .accessibilityLabel("Valuable Meccas nearby")
+            .accessibilityLabel("Valuable Mecca nearby")
 
             Button {
                 showLeaderboard = true
@@ -327,6 +328,32 @@ struct HuntMapView: View {
             targets: [primary] + others,
             primaryWorldMap: preloadedWorldMaps[primary.id]
         )
+    }
+
+    /// Fly the map to a Mecca from the valuable-nearby list and open its pin.
+    private func showLocation(of mecca: Mecca) {
+        showValuableNearby = false
+        let coordinate = CLLocationCoordinate2D(
+            latitude: mecca.latitude,
+            longitude: mecca.longitude
+        )
+        withAnimation(.easeInOut(duration: 0.45)) {
+            camera = .region(
+                MKCoordinateRegion(
+                    center: coordinate,
+                    latitudinalMeters: 450,
+                    longitudinalMeters: 450
+                )
+            )
+        }
+        if let cluster = model?.clusters.first(where: {
+            $0.meccas.contains(where: { $0.id == mecca.id })
+        }) {
+            // Let the sheet dismiss before presenting cluster details.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                selectedCluster = cluster
+            }
+        }
     }
 
     private func loadMyPoints(userID: UUID) async {
