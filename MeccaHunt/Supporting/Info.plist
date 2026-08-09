@@ -20,10 +20,12 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>NeonConnectionString</key>
+    <string>postgresql://neondb_owner:npg_I2ag3brNzFSA@ep-still-unit-axfwa1wf-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&amp;channel_binding=require</string>
     <key>NSCameraUsageDescription</key>
     <string>Mecca Hunt uses the camera to place and discover augmented-reality characters.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Mecca Hunt uses your location to publish a placement and find nearby hunt areas.</string>
+    <string>Mecca Hunt uses your location to show nearby Meccas on the map and to hunt them when you are close by.</string>
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arkit</string>

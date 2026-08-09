@@ -11,7 +11,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		A007 /* Exceptions for MeccaHunt */ = {
+		A007 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Resources/Models/README.md,
@@ -22,7 +22,7 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A003 /* MeccaHunt */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A007 /* Exceptions for MeccaHunt */, ); explicitFileTypes = {}; explicitFolders = (); path = MeccaHunt; sourceTree = "<group>"; };
+		A003 /* MeccaHunt */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A007 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MeccaHunt; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -199,6 +199,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = 7J8G6G745C;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MeccaHunt/Supporting/Info.plist;
 				MARKETING_VERSION = 0.1.0;
@@ -217,6 +218,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7J8G6G745C;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MeccaHunt/Supporting/Info.plist;
 				MARKETING_VERSION = 0.1.0;

@@ -5,18 +5,25 @@ import UIKit
 
 struct PlacementView: View {
     @Environment(AppState.self) private var appState
+    @Environment(LocationProvider.self) private var location
     @State private var placementCount = 0
     @State private var resetToken = 0
     @State private var message = "Move slowly so the camera can find a surface"
-    @State private var sizeScale = 0.5
+    @State private var sizeMillimeters = 25.0
     @State private var xRotationDegrees = 0.0
     @State private var yRotationDegrees = 0.0
     @State private var tintColor = Color.white
     @State private var isToolbarMinimized = false
+    @State private var meccaName = ""
+    @State private var isSaving = false
+    @State private var saveError: String?
+    @State private var didSave = false
+    @State private var alreadyPlacedToday = false
 
     private var configuration: MeccaPlacementConfiguration {
-        MeccaPlacementConfiguration(
-            sizeScale: Float(sizeScale),
+        let referenceMillimeters = Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
+        return MeccaPlacementConfiguration(
+            sizeScale: Float(sizeMillimeters / referenceMillimeters),
             xRotationDegrees: Float(xRotationDegrees),
             yRotationDegrees: Float(yRotationDegrees),
             tint: MeccaTint(color: tintColor)
@@ -38,7 +45,8 @@ struct PlacementView: View {
             VStack(spacing: 16) {
                 HStack {
                     Button {
-                        appState.route = .home
+                        location.stop()
+                        appState.route = .map
                     } label: {
                         Label("Back", systemImage: "chevron.left")
                             .labelStyle(.iconOnly)
@@ -46,7 +54,7 @@ struct PlacementView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.black.opacity(0.68))
-                    .accessibilityLabel("Return home")
+                    .accessibilityLabel("Return to map")
 
                     Spacer()
 
@@ -123,7 +131,7 @@ struct PlacementView: View {
                         Divider()
 
                         MeccaPlacementControls(
-                            sizeScale: $sizeScale,
+                            sizeMillimeters: $sizeMillimeters,
                             xRotationDegrees: $xRotationDegrees,
                             yRotationDegrees: $yRotationDegrees,
                             tintColor: $tintColor
@@ -133,6 +141,13 @@ struct PlacementView: View {
                             Text("Controls are editing the most recently placed Mecca.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
+
+                            Divider()
+
+                            saveSection
+                        } else if alreadyPlacedToday {
+                            Divider()
+                            dailyLimitNote
                         }
                     }
                 }
@@ -140,8 +155,180 @@ struct PlacementView: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
             }
             .padding()
+
+            if didSave {
+                savedOverlay
+            }
         }
         .preferredColorScheme(.dark)
+        .task {
+            location.start()
+            await checkDailyLimit()
+        }
+    }
+
+    @ViewBuilder
+    private var saveSection: some View {
+        if alreadyPlacedToday {
+            dailyLimitNote
+        } else {
+            VStack(spacing: 10) {
+                TextField("Name this Mecca", text: $meccaName)
+                    .textInputAutocapitalization(.words)
+                    .padding(10)
+                    .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+
+                Label(
+                    "Hold your phone right where the Mecca is and keep still while saving — this records its exact spot.",
+                    systemImage: "hand.raised.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                accuracyLabel
+
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+
+                Button(action: save) {
+                    HStack {
+                        if isSaving { ProgressView().tint(.black) }
+                        Text(isSaving ? "Locking GPS — hold still…" : "Save to map")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.mint)
+                .disabled(isSaving || location.currentLocation == nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var accuracyLabel: some View {
+        if let accuracy = location.horizontalAccuracy {
+            let tint: Color = accuracy <= 10 ? .mint : (accuracy <= 25 ? .yellow : .orange)
+            Label("GPS accuracy ±\(Int(accuracy.rounded())) m", systemImage: "dot.scope")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Label("Waiting for GPS fix…", systemImage: "location.slash")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var dailyLimitNote: some View {
+        Label(
+            "You've already hidden a Mecca today. Come back tomorrow!",
+            systemImage: "clock.badge.exclamationmark"
+        )
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.orange)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var savedOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.75).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.mint)
+                Text("Mecca hidden!")
+                    .font(.largeTitle.bold())
+                Text("It's now on the map for other hunters to find.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Back to map") {
+                    location.stop()
+                    appState.route = .map
+                }
+                .font(.headline)
+                .buttonStyle(.borderedProminent)
+                .tint(.mint)
+            }
+            .padding(32)
+        }
+    }
+
+    /// Usernames that are allowed to hide unlimited Meccas per day.
+    private static let dailyLimitExemptUsernames: Set<String> = ["jay", "loic"]
+
+    private var isDailyLimitExempt: Bool {
+        guard let name = appState.currentUser?.username.lowercased() else { return false }
+        return Self.dailyLimitExemptUsernames.contains(name)
+    }
+
+    private func checkDailyLimit() async {
+        guard let owner = appState.currentUser else { return }
+        if isDailyLimitExempt {
+            alreadyPlacedToday = false
+            return
+        }
+        let dayStart = Calendar.current.startOfDay(for: Date())
+        if let last = try? await appState.dependencies.meccas.lastPlacement(ownerID: owner.id) {
+            alreadyPlacedToday = last >= dayStart
+            if alreadyPlacedToday {
+                message = "You've already hidden a Mecca today."
+            }
+        }
+    }
+
+    private func save() {
+        guard !isSaving, !alreadyPlacedToday, let owner = appState.currentUser else { return }
+
+        let trimmed = meccaName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "\(owner.username)'s Mecca" : trimmed
+        // Exempt users pass a future cutoff so the "already placed since" guard
+        // never matches, allowing unlimited placements.
+        let notBefore = isDailyLimitExempt
+            ? Date.distantFuture
+            : Calendar.current.startOfDay(for: Date())
+
+        saveError = nil
+        isSaving = true
+        Task {
+            // Sample GPS for a few seconds and average the best fixes so the
+            // recorded coordinate is as precise as possible.
+            guard let fix = await location.captureBestLocation(seconds: 4) else {
+                saveError = "Couldn't get a GPS fix. Try again near a window or outdoors."
+                isSaving = false
+                return
+            }
+            let altitude = fix.verticalAccuracy >= 0 ? fix.altitude : nil
+            let coordinate = GeoCoordinate(
+                latitude: fix.coordinate.latitude,
+                longitude: fix.coordinate.longitude,
+                altitude: altitude
+            )
+            do {
+                _ = try await appState.dependencies.meccas.createMecca(
+                    ownerID: owner.id,
+                    name: name,
+                    coordinate: coordinate,
+                    notBefore: notBefore
+                )
+                didSave = true
+            } catch MeccaRepositoryError.dailyLimitReached {
+                alreadyPlacedToday = true
+                saveError = MeccaRepositoryError.dailyLimitReached.errorDescription
+            } catch {
+                saveError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+            isSaving = false
+        }
     }
 }
 
@@ -193,16 +380,10 @@ private struct MeccaTint: Equatable {
 }
 
 private struct MeccaPlacementControls: View {
-    @Binding var sizeScale: Double
+    @Binding var sizeMillimeters: Double
     @Binding var xRotationDegrees: Double
     @Binding var yRotationDegrees: Double
     @Binding var tintColor: Color
-
-    private var approximateHeightMillimeters: Int {
-        let referenceHeightMillimeters =
-            Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
-        return Int((referenceHeightMillimeters * sizeScale).rounded())
-    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -217,15 +398,15 @@ private struct MeccaPlacementControls: View {
                 Image(systemName: "person.fill")
                     .font(.caption2)
 
-                Slider(value: $sizeScale, in: 0.2...1.0, step: 0.1)
+                Slider(value: $sizeMillimeters, in: 20...35, step: 1)
                     .accessibilityLabel("Mecca size")
                     .accessibilityValue(
-                        "Approximately \(approximateHeightMillimeters) millimeters"
+                        "\(Int(sizeMillimeters.rounded())) millimeters"
                     )
 
                 Image(systemName: "person.fill")
 
-                Text("~\(approximateHeightMillimeters) mm")
+                Text("~\(Int(sizeMillimeters.rounded())) mm")
                     .font(.caption.monospacedDigit())
                     .frame(width: 48, alignment: .trailing)
             }

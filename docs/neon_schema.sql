@@ -1,0 +1,33 @@
+-- Mecca Hunt — Neon Postgres schema
+-- Run this once against your Neon database (SQL editor or psql).
+
+create extension if not exists pgcrypto;
+
+create table if not exists users (
+    id         uuid primary key default gen_random_uuid(),
+    username   text unique not null,
+    created_at timestamptz not null default now()
+);
+
+create table if not exists meccas (
+    id         uuid primary key default gen_random_uuid(),
+    owner_id   uuid not null references users(id) on delete cascade,
+    name       text not null,
+    latitude   double precision not null,
+    longitude  double precision not null,
+    altitude   double precision,
+    created_at timestamptz not null default now(),
+    state      text not null default 'active'
+);
+
+create table if not exists hunt_claims (
+    id            uuid primary key default gen_random_uuid(),
+    mecca_id      uuid not null references meccas(id) on delete cascade,
+    hunter_id     uuid not null references users(id) on delete cascade,
+    claimed_at    timestamptz not null default now(),
+    awarded_points int not null default 100,
+    unique (mecca_id, hunter_id)
+);
+
+create index if not exists meccas_owner_idx on meccas(owner_id);
+create index if not exists claims_hunter_idx on hunt_claims(hunter_id);

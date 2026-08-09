@@ -1,24 +1,58 @@
 import Foundation
 
-/// Backend boundary for map discovery and server-authoritative scoring.
-/// The initial setup intentionally provides no network implementation.
+/// Backend boundary for storing hidden Meccas, loading them for the map, and
+/// recording server-authoritative hunt claims.
 protocol MeccaRepository: Sendable {
-    func nearby(
+    /// Every active Mecca, annotated with claim info for the given hunter.
+    func allMeccas(hunterID: UUID) async throws -> [Mecca]
+
+    /// Persist a newly hidden Mecca owned by `ownerID`. Enforces the one-per-day
+    /// rule atomically: the insert only happens if the owner has not created a
+    /// Mecca since `notBefore`; otherwise it throws `.dailyLimitReached`.
+    func createMecca(
+        ownerID: UUID,
+        name: String,
         coordinate: GeoCoordinate,
-        radiusMeters: Double
-    ) async throws -> [MeccaPlacement]
+        notBefore: Date
+    ) async throws -> Mecca
 
-    func publish(_ placement: MeccaPlacement) async throws
+    /// The most recent time this owner hid a Mecca, or nil if they never have.
+    func lastPlacement(ownerID: UUID) async throws -> Date?
 
+    /// Record a hunt and remove the Mecca from the map. Fails if the hunter owns
+    /// the Mecca or it has already been found.
     func claim(
-        placementID: UUID,
-        hunterCoordinate: GeoCoordinate
+        meccaID: UUID,
+        hunterID: UUID,
+        awardedPoints: Int
     ) async throws -> HuntClaim
+
+    /// All players ranked by total points earned from hunts.
+    func leaderboard() async throws -> [LeaderboardEntry]
+
+    /// The active Meccas hidden by this owner (still out there to be found).
+    func meccasOwned(by ownerID: UUID) async throws -> [Mecca]
+
+    /// Permanently remove a Mecca. Only its owner may delete it.
+    func deleteMecca(id: UUID, ownerID: UUID) async throws
 }
 
-/// Storage boundary for encrypted spatial payloads such as ARWorldMap archives.
-protocol SpatialAnchorRepository: Sendable {
-    func upload(payload: Data, placementID: UUID) async throws -> String
-    func download(payloadID: String) async throws -> Data
-}
+enum MeccaRepositoryError: LocalizedError {
+    case cannotHuntOwnMecca
+    case dailyLimitReached
+    case unavailable
+    case notFound
 
+    var errorDescription: String? {
+        switch self {
+        case .cannotHuntOwnMecca:
+            return "You can't hunt a Mecca you hid yourself."
+        case .dailyLimitReached:
+            return "You've already hidden a Mecca today. Come back tomorrow!"
+        case .unavailable:
+            return "This Mecca has already been found."
+        case .notFound:
+            return "That Mecca could not be found."
+        }
+    }
+}
