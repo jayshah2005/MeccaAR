@@ -6,6 +6,7 @@ import UIKit
 enum MeccaEntityFactory {
     /// Scale 1 is a 30 mm character; the placement default of 0.5 is 15 mm.
     static let referenceHeightMeters: Float = 0.03
+    private static let faceOverlayName = "mecca-face-photo"
     private static var cachedTemplate: Entity?
     private static var loadTask: Task<Entity, Never>?
 
@@ -200,6 +201,8 @@ enum MeccaEntityFactory {
     }
 
     static func applyColor(_ color: UIColor, to entity: Entity) {
+        guard entity.name != faceOverlayName else { return }
+
         if let modelEntity = entity as? ModelEntity,
            var model = modelEntity.model {
             model.materials = [
@@ -215,6 +218,41 @@ enum MeccaEntityFactory {
         entity.children.forEach { child in
             applyColor(color, to: child)
         }
+    }
+
+    static func applyFacePhoto(_ image: UIImage?, to entity: Entity) {
+        entity.findEntity(named: faceOverlayName)?.removeFromParent()
+
+        guard let cgImage = image?.cgImage,
+              let texture = try? TextureResource.generate(
+                  from: cgImage,
+                  options: .init(semantic: .color)
+              ) else {
+            return
+        }
+
+        let bounds = entity.visualBounds(relativeTo: entity)
+        let height = bounds.extents.y
+        guard height > 0.0001 else { return }
+
+        let faceSize = height * 0.22
+        var material = UnlitMaterial()
+        material.baseColor = .texture(texture)
+        let faceOverlay = ModelEntity(
+            mesh: .generatePlane(width: faceSize, depth: faceSize),
+            materials: [material]
+        )
+        faceOverlay.name = faceOverlayName
+        faceOverlay.position = [
+            bounds.center.x,
+            bounds.min.y + (height * 0.84),
+            bounds.max.z + max(faceSize * 0.02, 0.0001)
+        ]
+        faceOverlay.orientation = simd_quatf(
+            angle: .pi / 2,
+            axis: [1, 0, 0]
+        )
+        entity.addChild(faceOverlay)
     }
 
     private static func addLimb(

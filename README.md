@@ -7,11 +7,12 @@ This branch contains the foundation plus the first local AR capability:
 - a cloneable SwiftUI iPhone project;
 - a camera placement screen with horizontal and vertical plane detection;
 - tap-to-place using the supplied Sketchfab USDZ, with a procedural fallback;
-- live color, size, and independent X/Y-axis rotation controls;
+- live color, size, independent X/Y-axis rotation, and an optional face photo;
 - domain contracts for placement, discovery, and claiming;
 - product, technical, privacy, and delivery plans.
 
 Placement currently exists only in the active AR session. Controls edit the most recently placed Mecca and set the configuration for the next placement. Nothing is saved, published, placed on the map, or visible to another phone yet.
+Face photos also remain in memory for the active session and are not saved or uploaded.
 
 ## Feature boundaries
 

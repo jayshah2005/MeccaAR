@@ -26,6 +26,9 @@ struct PlacementView: View {
     @State private var mappingQuality: ARFrame.WorldMappingStatus = .notAvailable
     @State private var canPlace = false
     @State private var placeToken = 0
+    @State private var facePhoto: UIImage?
+    @State private var facePhotoRevision = 0
+    @State private var isFaceCameraPresented = false
 
     private var configuration: MeccaPlacementConfiguration {
         let referenceMillimeters = Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
@@ -33,6 +36,7 @@ struct PlacementView: View {
             sizeScale: Float(sizeMillimeters / referenceMillimeters),
             xRotationDegrees: Float(xRotationDegrees),
             yRotationDegrees: Float(yRotationDegrees),
+            facePhotoRevision: facePhotoRevision,
             tint: MeccaTint(color: tintColor)
         )
     }
@@ -60,7 +64,9 @@ struct PlacementView: View {
                 configuration: configuration,
                 session: arSession,
                 canPlace: $canPlace,
-                placeToken: placeToken
+                placeToken: placeToken,
+                facePhoto: facePhoto,
+                isFaceCameraActive: isFaceCameraPresented
             )
             .ignoresSafeArea()
 
@@ -160,7 +166,17 @@ struct PlacementView: View {
                             sizeMillimeters: $sizeMillimeters,
                             xRotationDegrees: $xRotationDegrees,
                             yRotationDegrees: $yRotationDegrees,
-                            tintColor: $tintColor
+                            tintColor: $tintColor,
+                            facePhoto: facePhoto,
+                            cameraAvailable: UIImagePickerController
+                                .isSourceTypeAvailable(.camera),
+                            onTakeFacePhoto: {
+                                isFaceCameraPresented = true
+                            },
+                            onRemoveFacePhoto: {
+                                facePhoto = nil
+                                facePhotoRevision += 1
+                            }
                         )
 
                         if placementCount > 0 {
@@ -199,6 +215,15 @@ struct PlacementView: View {
                 mappingQuality = arSession.currentMappingStatus()
                 try? await Task.sleep(nanoseconds: 600_000_000)
             }
+        }
+        .sheet(isPresented: $isFaceCameraPresented) {
+            FaceCameraCaptureView(
+                isPresented: $isFaceCameraPresented
+            ) { image in
+                facePhoto = image
+                facePhotoRevision += 1
+            }
+            .ignoresSafeArea()
         }
     }
 
@@ -444,6 +469,7 @@ private struct MeccaPlacementConfiguration: Equatable {
     let sizeScale: Float
     let xRotationDegrees: Float
     let yRotationDegrees: Float
+    let facePhotoRevision: Int
     let tint: MeccaTint
 }
 
@@ -492,6 +518,10 @@ private struct MeccaPlacementControls: View {
     @Binding var xRotationDegrees: Double
     @Binding var yRotationDegrees: Double
     @Binding var tintColor: Color
+    let facePhoto: UIImage?
+    let cameraAvailable: Bool
+    let onTakeFacePhoto: () -> Void
+    let onRemoveFacePhoto: () -> Void
 
     var body: some View {
         VStack(spacing: 12) {
@@ -501,6 +531,13 @@ private struct MeccaPlacementControls: View {
                 supportsOpacity: false
             )
             .font(.subheadline.weight(.semibold))
+
+            FacePhotoControl(
+                image: facePhoto,
+                cameraAvailable: cameraAvailable,
+                onTakePhoto: onTakeFacePhoto,
+                onRemovePhoto: onRemoveFacePhoto
+            )
 
             HStack(spacing: 12) {
                 Image(systemName: "person.fill")
@@ -527,6 +564,57 @@ private struct MeccaPlacementControls: View {
                 axisName: "X",
                 degrees: $xRotationDegrees
             )
+        }
+    }
+}
+
+private struct FacePhotoControl: View {
+    let image: UIImage?
+    let cameraAvailable: Bool
+    let onTakePhoto: () -> Void
+    let onRemovePhoto: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 40, height: 40)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.5)))
+                }
+
+                Button {
+                    onTakePhoto()
+                } label: {
+                    Label(
+                        image == nil ? "Add your face" : "Retake face photo",
+                        systemImage: "camera.fill"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(!cameraAvailable)
+
+                if image != nil {
+                    Button(role: .destructive) {
+                        onRemovePhoto()
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Remove face photo")
+                }
+            }
+
+            Text(
+                cameraAvailable
+                    ? "The face photo stays in this AR session."
+                    : "A physical iPhone camera is required for a face photo."
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -610,6 +698,8 @@ private struct PlacementARView: UIViewRepresentable {
     let session: PlacementARSession
     @Binding var canPlace: Bool
     let placeToken: Int
+    let facePhoto: UIImage?
+    let isFaceCameraActive: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -647,6 +737,7 @@ private struct PlacementARView: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.setFaceCameraActive(isFaceCameraActive)
         context.coordinator.clearIfNeeded(resetToken: resetToken)
         context.coordinator.applyConfigurationToLatestMecca()
         context.coordinator.handlePlaceToken(placeToken)
@@ -686,6 +777,7 @@ private struct PlacementARView: UIViewRepresentable {
         private var latestHit: SurfaceHit?
         private var lastReportedCanPlace = false
         private var lastPlaceToken = 0
+        private var faceCameraIsActive = false
 
         init(_ parent: PlacementARView) {
             self.parent = parent
@@ -694,6 +786,10 @@ private struct PlacementARView: UIViewRepresentable {
         }
 
         func runSession() {
+            runSession(resetTracking: true)
+        }
+
+        private func runSession(resetTracking: Bool) {
             guard let arView else { return }
 
             let configuration = ARWorldTrackingConfiguration()
@@ -706,10 +802,21 @@ private struct PlacementARView: UIViewRepresentable {
                 configuration.sceneReconstruction = .mesh
             }
 
-            arView.session.run(
-                configuration,
-                options: [.resetTracking, .removeExistingAnchors]
-            )
+            let options: ARSession.RunOptions = resetTracking
+                ? [.resetTracking, .removeExistingAnchors]
+                : []
+            arView.session.run(configuration, options: options)
+        }
+
+        func setFaceCameraActive(_ isActive: Bool) {
+            guard isActive != faceCameraIsActive else { return }
+            faceCameraIsActive = isActive
+
+            if isActive {
+                arView?.session.pause()
+            } else {
+                runSession(resetTracking: false)
+            }
         }
 
         /// Builds the placement reticle and starts a per-frame loop that raycasts
@@ -840,6 +947,7 @@ private struct PlacementARView: UIViewRepresentable {
 
             let anchor = AnchorEntity(world: anchorTransform)
             let placementConfiguration = parent.configuration
+            let placementFacePhoto = parent.facePhoto
             parent.message = "Loading Mecca…"
 
             // Persist a named session anchor at the same spot so it is captured
@@ -866,7 +974,12 @@ private struct PlacementARView: UIViewRepresentable {
                     entity: entity
                 )
                 self.placedMeccas.append(placedMecca)
-                self.apply(placementConfiguration, to: placedMecca)
+                self.apply(
+                    placementConfiguration,
+                    facePhoto: placementFacePhoto,
+                    shouldUpdateFacePhoto: true,
+                    to: placedMecca
+                )
                 self.lastAppliedConfiguration = placementConfiguration
 
                 self.parent.placementCount = 1
@@ -890,13 +1003,22 @@ private struct PlacementARView: UIViewRepresentable {
             let configuration = parent.configuration
             guard configuration != lastAppliedConfiguration else { return }
             if let latest = placedMeccas.last {
-                apply(configuration, to: latest)
+                let facePhotoChanged = configuration.facePhotoRevision
+                    != lastAppliedConfiguration?.facePhotoRevision
+                apply(
+                    configuration,
+                    facePhoto: parent.facePhoto,
+                    shouldUpdateFacePhoto: facePhotoChanged,
+                    to: latest
+                )
             }
             lastAppliedConfiguration = configuration
         }
 
         private func apply(
             _ configuration: MeccaPlacementConfiguration,
+            facePhoto: UIImage?,
+            shouldUpdateFacePhoto: Bool,
             to placedMecca: PlacedMecca
         ) {
             let scale = configuration.sizeScale
@@ -911,6 +1033,13 @@ private struct PlacementARView: UIViewRepresentable {
             let xRotation = simd_quatf(angle: xRadians, axis: [1, 0, 0])
             let yRotation = simd_quatf(angle: yRadians, axis: [0, 1, 0])
             placedMecca.entity.orientation = yRotation * xRotation
+
+            if shouldUpdateFacePhoto {
+                MeccaEntityFactory.applyFacePhoto(
+                    facePhoto,
+                    to: placedMecca.entity
+                )
+            }
         }
 
         private static func reticleMaterial(valid: Bool) -> UnlitMaterial {

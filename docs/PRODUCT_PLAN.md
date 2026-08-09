@@ -13,7 +13,7 @@ The creative inspiration is the paint-and-camouflage tension of *MECCHA CHAMELEO
 1. Sign in and choose **Hide**.
 2. Scan enough of the space for reliable tracking.
 3. Place and orient the character on a detected surface.
-4. Optionally choose a simple color/camouflage treatment.
+4. Optionally choose a simple color/camouflage treatment and in-session face photo.
 5. Confirm a map clue, expiry, and public-space safety statement.
 6. Publish the coarse discovery location and private spatial anchor.
 
@@ -66,6 +66,7 @@ The creative inspiration is the paint-and-camouflage tension of *MECCHA CHAMELEO
 - Require a hider confirmation that they have permission to place content in the space.
 - Provide report, block, removal, expiry, and rate-limit systems before public testing.
 - Keep exact coordinates, spatial maps, and any guidance imagery private and short-lived.
+- Keep prototype face photos in memory only; do not upload or publish them without explicit consent, retention, and moderation rules.
 - Never store a continuous location trail; retain only the placement coordinate and short-lived claim evidence.
 - Add age gating and a legal/privacy review before TestFlight leaves a controlled group.
 
@@ -75,4 +76,3 @@ The creative inspiration is the paint-and-camouflage tension of *MECCHA CHAMELEO
 2. Does the first hunter remove a Mecca, or can every hunter claim it once until expiry?
 3. Should hiders receive points when their Mecca survives or gets discovered?
 4. What original product and character name replaces the working “Mecca” name?
-

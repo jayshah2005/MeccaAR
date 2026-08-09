@@ -5,6 +5,8 @@ at runtime, corrects its exported standing axis, normalizes its visible height
 to 30 mm, places its lowest point on the detected surface, and then applies the
 user's size, X/Y rotation, and color controls. The placement default is 0.5,
 making the character about 15 mm tall. The slider covers approximately 6–30 mm.
+A captured face photo can be rendered as a small unlit plane over the character's
+head area; it is kept only in memory for the active AR session.
 A small procedural character remains in code as a fallback if the bundled model
 cannot load.
 
