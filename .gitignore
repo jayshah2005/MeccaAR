@@ -1,0 +1,9 @@
+.DS_Store
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Local configuration and credentials
+Config/Local.xcconfig
+*.env
+

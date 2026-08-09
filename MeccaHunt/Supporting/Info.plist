@@ -5,7 +5,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
-    <string>StreetSketch</string>
+    <string>Mecca Hunt</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -21,12 +21,20 @@
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>NSCameraUsageDescription</key>
-    <string>StreetSketch uses the camera to place and view drawings in the world.</string>
+    <string>Mecca Hunt uses the camera to place and discover augmented-reality characters.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Mecca Hunt uses your location to publish a placement and find nearby hunt areas.</string>
     <key>UIRequiredDeviceCapabilities</key>
-    <array><string>arkit</string><string>arm64</string></array>
+    <array>
+        <string>arkit</string>
+        <string>arm64</string>
+    </array>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UISupportedInterfaceOrientations</key>
-    <array><string>UIInterfaceOrientationPortrait</string></array>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
 </dict>
 </plist>
+
