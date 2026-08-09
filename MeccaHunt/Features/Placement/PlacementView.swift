@@ -1035,10 +1035,15 @@ private struct PlacementARView: UIViewRepresentable {
             placedMecca.entity.orientation = yRotation * xRotation
 
             if shouldUpdateFacePhoto {
-                MeccaEntityFactory.applyFacePhoto(
+                let didApplyFacePhoto = MeccaEntityFactory.applyFacePhoto(
                     facePhoto,
                     to: placedMecca.entity
                 )
+                if facePhoto != nil {
+                    parent.message = didApplyFacePhoto
+                        ? "Face photo applied — rotate the Mecca to view it"
+                        : "Couldn't apply the face photo — please retake it"
+                }
             }
         }
 

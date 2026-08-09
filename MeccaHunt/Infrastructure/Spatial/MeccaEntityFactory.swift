@@ -220,7 +220,8 @@ enum MeccaEntityFactory {
         }
     }
 
-    static func applyFacePhoto(_ image: UIImage?, to entity: Entity) {
+    @discardableResult
+    static func applyFacePhoto(_ image: UIImage?, to entity: Entity) -> Bool {
         entity.findEntity(named: faceOverlayName)?.removeFromParent()
 
         guard let cgImage = image?.cgImage,
@@ -228,31 +229,46 @@ enum MeccaEntityFactory {
                   from: cgImage,
                   options: .init(semantic: .color)
               ) else {
-            return
+            return false
         }
 
         let bounds = entity.visualBounds(relativeTo: entity)
         let height = bounds.extents.y
-        guard height > 0.0001 else { return }
+        guard height > 0.0001 else { return false }
 
-        let faceSize = height * 0.22
+        // This USDZ's arms extend above and in front of its head, so the full
+        // bounds extrema are not the face. The imported mesh's local vertical
+        // direction is inverted after its authoring transforms, placing the
+        // head about 24% up from the prepared bounds minimum. Its front also
+        // sits slightly behind the model's front-most geometry.
+        let faceDiameter = height * 0.15
+        let faceCenterY = bounds.min.y + (height * 0.24)
+        let faceFrontZ = bounds.center.z + (bounds.extents.z * 0.40)
         var material = UnlitMaterial()
         material.baseColor = .texture(texture)
+        if #available(iOS 18.0, *) {
+            material.faceCulling = .none
+        }
         let faceOverlay = ModelEntity(
-            mesh: .generatePlane(width: faceSize, depth: faceSize),
+            mesh: .generatePlane(
+                width: faceDiameter,
+                depth: faceDiameter,
+                cornerRadius: faceDiameter / 2
+            ),
             materials: [material]
         )
         faceOverlay.name = faceOverlayName
         faceOverlay.position = [
             bounds.center.x,
-            bounds.min.y + (height * 0.84),
-            bounds.max.z + max(faceSize * 0.02, 0.0001)
+            faceCenterY,
+            faceFrontZ + max(faceDiameter * 0.015, 0.00005)
         ]
         faceOverlay.orientation = simd_quatf(
             angle: .pi / 2,
             axis: [1, 0, 0]
         )
         entity.addChild(faceOverlay)
+        return true
     }
 
     private static func addLimb(
