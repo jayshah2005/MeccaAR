@@ -8,6 +8,8 @@
 
 /* Begin PBXFileReference section */
 		A006 /* MeccaHunt.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MeccaHunt.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A030 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Debug.xcconfig; sourceTree = "<group>"; };
+		A031 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Release.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -39,6 +41,8 @@
 		A002 = {
 			isa = PBXGroup;
 			children = (
+				A030 /* Debug.xcconfig */,
+				A031 /* Release.xcconfig */,
 				A003 /* MeccaHunt */,
 				A004 /* Products */,
 			);
@@ -194,6 +198,7 @@
 		};
 		A014 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A030 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
@@ -214,6 +219,7 @@
 		};
 		A015 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A031 /* Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;

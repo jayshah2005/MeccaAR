@@ -21,7 +21,7 @@
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>NeonConnectionString</key>
-    <string>postgresql://neondb_owner:npg_I2ag3brNzFSA@ep-still-unit-axfwa1wf-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&amp;channel_binding=require</string>
+    <string>$(NEON_CONNECTION_STRING)</string>
     <key>NSCameraUsageDescription</key>
     <string>Mecca Hunt uses the camera to place augmented-reality characters and optionally capture a face photo for your Mecca.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

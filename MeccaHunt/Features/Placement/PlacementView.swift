@@ -27,8 +27,11 @@ struct PlacementView: View {
     @State private var canPlace = false
     @State private var placeToken = 0
     @State private var facePhoto: UIImage?
+    @State private var pendingFacePhoto: UIImage?
+    @State private var facePhotoPlacement = MeccaPhotoPlacement.initial
     @State private var facePhotoRevision = 0
     @State private var isFaceCameraPresented = false
+    @State private var isFaceEditorPresented = false
 
     private var configuration: MeccaPlacementConfiguration {
         let referenceMillimeters = Double(MeccaEntityFactory.referenceHeightMeters * 1_000)
@@ -36,6 +39,7 @@ struct PlacementView: View {
             sizeScale: Float(sizeMillimeters / referenceMillimeters),
             xRotationDegrees: Float(xRotationDegrees),
             yRotationDegrees: Float(yRotationDegrees),
+            facePhotoPlacement: facePhotoPlacement,
             facePhotoRevision: facePhotoRevision,
             tint: MeccaTint(color: tintColor)
         )
@@ -66,7 +70,7 @@ struct PlacementView: View {
                 canPlace: $canPlace,
                 placeToken: placeToken,
                 facePhoto: facePhoto,
-                isFaceCameraActive: isFaceCameraPresented
+                isFaceCameraActive: isFaceCameraPresented || isFaceEditorPresented
             )
             .ignoresSafeArea()
 
@@ -171,10 +175,15 @@ struct PlacementView: View {
                             cameraAvailable: UIImagePickerController
                                 .isSourceTypeAvailable(.camera),
                             onTakeFacePhoto: {
+                                pendingFacePhoto = nil
                                 isFaceCameraPresented = true
+                            },
+                            onPositionFacePhoto: {
+                                isFaceEditorPresented = true
                             },
                             onRemoveFacePhoto: {
                                 facePhoto = nil
+                                pendingFacePhoto = nil
                                 facePhotoRevision += 1
                             }
                         )
@@ -216,14 +225,39 @@ struct PlacementView: View {
                 try? await Task.sleep(nanoseconds: 600_000_000)
             }
         }
-        .sheet(isPresented: $isFaceCameraPresented) {
+        .sheet(
+            isPresented: $isFaceCameraPresented,
+            onDismiss: {
+                if pendingFacePhoto != nil {
+                    isFaceEditorPresented = true
+                }
+            }
+        ) {
             FaceCameraCaptureView(
                 isPresented: $isFaceCameraPresented
             ) { image in
-                facePhoto = image
-                facePhotoRevision += 1
+                pendingFacePhoto = image
             }
             .ignoresSafeArea()
+        }
+        .sheet(
+            isPresented: $isFaceEditorPresented,
+            onDismiss: {
+                pendingFacePhoto = nil
+            }
+        ) {
+            if let editorImage = pendingFacePhoto ?? facePhoto {
+                MeccaPhotoPlacementEditor(
+                    image: editorImage,
+                    tintColor: tintColor,
+                    initialPlacement: facePhotoPlacement
+                ) { placement in
+                    facePhoto = editorImage
+                    facePhotoPlacement = placement
+                    facePhotoRevision += 1
+                    pendingFacePhoto = nil
+                }
+            }
         }
     }
 
@@ -469,6 +503,7 @@ private struct MeccaPlacementConfiguration: Equatable {
     let sizeScale: Float
     let xRotationDegrees: Float
     let yRotationDegrees: Float
+    let facePhotoPlacement: MeccaPhotoPlacement
     let facePhotoRevision: Int
     let tint: MeccaTint
 }
@@ -521,6 +556,7 @@ private struct MeccaPlacementControls: View {
     let facePhoto: UIImage?
     let cameraAvailable: Bool
     let onTakeFacePhoto: () -> Void
+    let onPositionFacePhoto: () -> Void
     let onRemoveFacePhoto: () -> Void
 
     var body: some View {
@@ -536,6 +572,7 @@ private struct MeccaPlacementControls: View {
                 image: facePhoto,
                 cameraAvailable: cameraAvailable,
                 onTakePhoto: onTakeFacePhoto,
+                onPositionPhoto: onPositionFacePhoto,
                 onRemovePhoto: onRemoveFacePhoto
             )
 
@@ -572,6 +609,7 @@ private struct FacePhotoControl: View {
     let image: UIImage?
     let cameraAvailable: Bool
     let onTakePhoto: () -> Void
+    let onPositionPhoto: () -> Void
     let onRemovePhoto: () -> Void
 
     var body: some View {
@@ -608,9 +646,20 @@ private struct FacePhotoControl: View {
                 }
             }
 
+            if image != nil {
+                Button {
+                    onPositionPhoto()
+                } label: {
+                    Label("Position photo on Mecca", systemImage: "move.3d")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.mint)
+                .foregroundStyle(.black)
+            }
+
             Text(
                 cameraAvailable
-                    ? "The face photo stays in this AR session."
+                    ? "After capture, drag the photo anywhere on the Mecca. It stays in this AR session."
                     : "A physical iPhone camera is required for a face photo."
             )
             .font(.caption2)
@@ -1037,11 +1086,12 @@ private struct PlacementARView: UIViewRepresentable {
             if shouldUpdateFacePhoto {
                 let didApplyFacePhoto = MeccaEntityFactory.applyFacePhoto(
                     facePhoto,
+                    placement: configuration.facePhotoPlacement,
                     to: placedMecca.entity
                 )
                 if facePhoto != nil {
                     parent.message = didApplyFacePhoto
-                        ? "Face photo applied — rotate the Mecca to view it"
+                        ? "Photo applied at your selected position"
                         : "Couldn't apply the face photo — please retake it"
                 }
             }

@@ -1,0 +1,2 @@
+// Never embed a database owner credential in a distributed app.
+NEON_CONNECTION_STRING =

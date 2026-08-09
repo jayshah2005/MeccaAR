@@ -1,0 +1,3 @@
+// Copy this file to Local.xcconfig and fill in your local Debug credential.
+// $() prevents xcconfig from treating the second slash as a comment.
+NEON_CONNECTION_STRING = postgresql:/$()/USER:PASSWORD@HOST/DATABASE?sslmode=require

@@ -2,6 +2,20 @@ import Combine
 import RealityKit
 import UIKit
 
+struct MeccaPhotoPlacement: Equatable, Sendable {
+    var horizontal: Float
+    var vertical: Float
+
+    static let initial = MeccaPhotoPlacement(horizontal: 0.5, vertical: 0.75)
+
+    var clamped: MeccaPhotoPlacement {
+        MeccaPhotoPlacement(
+            horizontal: min(max(horizontal, 0), 1),
+            vertical: min(max(vertical, 0), 1)
+        )
+    }
+}
+
 @MainActor
 enum MeccaEntityFactory {
     /// Scale 1 is a 30 mm character; the placement default of 0.5 is 15 mm.
@@ -221,7 +235,11 @@ enum MeccaEntityFactory {
     }
 
     @discardableResult
-    static func applyFacePhoto(_ image: UIImage?, to entity: Entity) -> Bool {
+    static func applyFacePhoto(
+        _ image: UIImage?,
+        placement: MeccaPhotoPlacement,
+        to entity: Entity
+    ) -> Bool {
         entity.findEntity(named: faceOverlayName)?.removeFromParent()
 
         guard let cgImage = image?.cgImage,
@@ -233,17 +251,11 @@ enum MeccaEntityFactory {
         }
 
         let bounds = entity.visualBounds(relativeTo: entity)
-        let height = bounds.extents.y
-        guard height > 0.0001 else { return false }
+        let projection = PhotoProjection(bounds: bounds)
+        guard projection.verticalExtent > 0.0001 else { return false }
 
-        // This USDZ's arms extend above and in front of its head, so the full
-        // bounds extrema are not the face. The imported mesh's local vertical
-        // direction is inverted after its authoring transforms, placing the
-        // head about 24% up from the prepared bounds minimum. Its front also
-        // sits slightly behind the model's front-most geometry.
-        let faceDiameter = height * 0.15
-        let faceCenterY = bounds.min.y + (height * 0.24)
-        let faceFrontZ = bounds.center.z + (bounds.extents.z * 0.40)
+        let selectedPlacement = placement.clamped
+        let faceDiameter = projection.verticalExtent * 0.15
         var material = UnlitMaterial()
         material.baseColor = .texture(texture)
         if #available(iOS 18.0, *) {
@@ -258,17 +270,138 @@ enum MeccaEntityFactory {
             materials: [material]
         )
         faceOverlay.name = faceOverlayName
-        faceOverlay.position = [
-            bounds.center.x,
-            faceCenterY,
-            faceFrontZ + max(faceDiameter * 0.015, 0.00005)
-        ]
-        faceOverlay.orientation = simd_quatf(
-            angle: .pi / 2,
-            axis: [1, 0, 0]
+        faceOverlay.position = projection.position(
+            for: selectedPlacement,
+            surfaceOffset: max(faceDiameter * 0.015, 0.00005)
         )
+        faceOverlay.orientation = projection.overlayOrientation
         entity.addChild(faceOverlay)
         return true
+    }
+
+    /// Rotates a clone into the exact front projection used by the drag editor.
+    /// The placed AR entity is never passed here, so this does not change the
+    /// user's X/Y rotation controls.
+    static func preparePhotoPlacementPreview(_ entity: Entity) {
+        let bounds = entity.visualBounds(relativeTo: entity)
+        entity.orientation = PhotoProjection(bounds: bounds).previewOrientation
+    }
+
+    private struct PhotoProjection {
+        let bounds: BoundingBox
+        let horizontalAxis: ModelAxis
+        let verticalAxis: ModelAxis
+        let depthAxis: ModelAxis
+        let frontSign: Float
+
+        init(bounds: BoundingBox) {
+            self.bounds = bounds
+
+            // Some USDZ import paths leave this particular model standing on Y,
+            // while others expose its authored Z standing axis. Detect the
+            // longest visible dimension instead of hard-coding either layout.
+            if bounds.extents.z > bounds.extents.y,
+               bounds.extents.z > bounds.extents.x {
+                horizontalAxis = .x
+                verticalAxis = .z
+                depthAxis = .y
+                frontSign = -1
+            } else if bounds.extents.y >= bounds.extents.x {
+                horizontalAxis = .x
+                verticalAxis = .y
+                depthAxis = .z
+                frontSign = 1
+            } else {
+                horizontalAxis = .z
+                verticalAxis = .x
+                depthAxis = .y
+                frontSign = 1
+            }
+        }
+
+        var verticalExtent: Float {
+            verticalAxis.value(in: bounds.extents)
+        }
+
+        var overlayOrientation: simd_quatf {
+            if verticalAxis == .y, depthAxis == .z, frontSign > 0 {
+                let faceForward = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
+                let standUpright = simd_quatf(angle: .pi, axis: [0, 0, 1])
+                return standUpright * faceForward
+            }
+
+            if verticalAxis == .z, depthAxis == .y, frontSign < 0 {
+                return simd_quatf(angle: .pi, axis: [0, 0, 1])
+            }
+
+            let front = depthAxis.unitVector * frontSign
+            let vertical = verticalAxis.unitVector
+            let faceForward = simd_quatf(from: [0, 1, 0], to: front)
+            let currentVertical = faceForward.act([0, 0, 1])
+            let standUpright = simd_quatf(from: currentVertical, to: vertical)
+            return standUpright * faceForward
+        }
+
+        var previewOrientation: simd_quatf {
+            if verticalAxis == .y, depthAxis == .z, frontSign > 0 {
+                return simd_quatf(angle: 0, axis: [0, 1, 0])
+            }
+
+            if verticalAxis == .z, depthAxis == .y, frontSign < 0 {
+                return simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+            }
+
+            return simd_quatf(from: verticalAxis.unitVector, to: [0, 1, 0])
+        }
+
+        func position(
+            for placement: MeccaPhotoPlacement,
+            surfaceOffset: Float
+        ) -> SIMD3<Float> {
+            var result = bounds.center
+            let horizontal = horizontalAxis.value(in: bounds.min)
+                + horizontalAxis.value(in: bounds.extents) * placement.horizontal
+            let vertical = verticalAxis.value(in: bounds.min)
+                + verticalAxis.value(in: bounds.extents) * placement.vertical
+            let depth = depthAxis.value(in: bounds.center)
+                + frontSign * (
+                    depthAxis.value(in: bounds.extents) / 2 + surfaceOffset
+                )
+            horizontalAxis.set(horizontal, in: &result)
+            verticalAxis.set(vertical, in: &result)
+            depthAxis.set(depth, in: &result)
+            return result
+        }
+    }
+
+    private enum ModelAxis: Equatable {
+        case x
+        case y
+        case z
+
+        var unitVector: SIMD3<Float> {
+            switch self {
+            case .x: return [1, 0, 0]
+            case .y: return [0, 1, 0]
+            case .z: return [0, 0, 1]
+            }
+        }
+
+        func value(in vector: SIMD3<Float>) -> Float {
+            switch self {
+            case .x: return vector.x
+            case .y: return vector.y
+            case .z: return vector.z
+            }
+        }
+
+        func set(_ value: Float, in vector: inout SIMD3<Float>) {
+            switch self {
+            case .x: vector.x = value
+            case .y: vector.y = value
+            case .z: vector.z = value
+            }
+        }
     }
 
     private static func addLimb(
