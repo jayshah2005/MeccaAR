@@ -350,21 +350,29 @@ private struct PlacementARView: UIViewRepresentable {
             anchorTransform.columns.3.z += normalizedNormal.z * 0.015
 
             let anchor = AnchorEntity(world: anchorTransform)
-            let entity = MeccaEntityFactory.make()
-            anchor.addChild(entity)
-            arView.scene.addAnchor(anchor)
+            let surfaceOrientation = Self.orientation(from: result.worldTransform)
+            let placementConfiguration = parent.configuration
+            parent.message = "Loading Mecca…"
 
-            let placedMecca = PlacedMecca(
-                anchor: anchor,
-                entity: entity,
-                surfaceOrientation: Self.orientation(from: result.worldTransform)
-            )
-            placedMeccas.append(placedMecca)
-            apply(parent.configuration, to: placedMecca)
-            lastAppliedConfiguration = parent.configuration
+            Task { @MainActor [weak self] in
+                guard let self, let arView = self.arView else { return }
 
-            parent.placementCount += 1
-            parent.message = "Mecca placed in this AR session"
+                let entity = await MeccaEntityFactory.make()
+                anchor.addChild(entity)
+                arView.scene.addAnchor(anchor)
+
+                let placedMecca = PlacedMecca(
+                    anchor: anchor,
+                    entity: entity,
+                    surfaceOrientation: surfaceOrientation
+                )
+                self.placedMeccas.append(placedMecca)
+                self.apply(placementConfiguration, to: placedMecca)
+                self.lastAppliedConfiguration = placementConfiguration
+
+                self.parent.placementCount += 1
+                self.parent.message = "Mecca placed in this AR session"
+            }
         }
 
         func clearIfNeeded(resetToken: Int) {

@@ -7,7 +7,7 @@ Each phase ends with a go/no-go check. Avoid building progression systems until 
 - [x] Preserve earlier prototype work on its existing branch.
 - [x] Create a cloneable iOS project and folder boundaries.
 - [x] Define product scope, data contracts, privacy constraints, and AR strategy.
-- [x] Add the placeholder asset requirements.
+- [x] Add the supplied licensed USDZ with attribution and a procedural fallback.
 - [ ] Choose an original product/character name and obtain an original `.usdz` model.
 - [ ] Decide the first controlled field-test venue.
 
@@ -16,10 +16,11 @@ Exit: the team agrees on MVP scope and can launch the setup shell in Xcode.
 ## Phase 1 — local placement spike
 
 - [x] Camera-based AR screen with coaching and horizontal/vertical plane detection.
-- [x] Tap-to-place using a temporary procedural model.
+- [x] Tap-to-place using the supplied USDZ model.
 - [x] Live color, size, rotation, and upright/lying controls for the latest placement.
 - [ ] Camera/location permission education and denial states.
-- [ ] Original USDZ loading and a polished placement preview.
+- [x] Licensed USDZ loading, validation, bounds normalization, and fallback.
+- [ ] Polished placement preview.
 - Local anchor save/restore on the same phone only.
 - Structured AR session state and OSLog diagnostics.
 
