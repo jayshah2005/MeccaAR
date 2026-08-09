@@ -20,10 +20,12 @@ struct PlacementView: View {
     @State private var saveError: String?
     @State private var didSave = false
     @State private var didSaveWithMap = false
+    @State private var savedCapturePercentage = 0
     @State private var alreadyPlacedToday = false
     @State private var saveStatus = "Save to map"
     @State private var arSession = PlacementARSession()
-    @State private var mappingQuality: ARFrame.WorldMappingStatus = .notAvailable
+    @State private var environmentScan = PlacementARSession.EnvironmentScanSnapshot.empty
+    @State private var isScanReviewPresented = false
     @State private var canPlace = false
     @State private var placeToken = 0
     @State private var facePhoto: UIImage?
@@ -57,6 +59,17 @@ struct PlacementView: View {
             green: tint.green,
             blue: tint.blue
         )
+    }
+
+    private var environmentScanIsReady: Bool {
+        guard environmentScan.directionalProgress >= 1,
+              environmentScan.parallaxProgress >= 1
+        else { return false }
+        return environmentScan.mappingStatus == .mapped
+    }
+
+    private var capturePercentage: Int {
+        Int((environmentScan.roomCaptureProgress * 100).rounded())
     }
 
     var body: some View {
@@ -142,63 +155,22 @@ struct PlacementView: View {
                     }
 
                     if !isToolbarMinimized {
-                        Text("Point the reticle at a floor, table, or wall. When it turns green, tap Place Mecca.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-
-                        HStack {
-                            Label("\(placementCount) placed", systemImage: "mappin.and.ellipse")
-                                .font(.caption.weight(.bold))
-
-                            Spacer()
-
-                            if placementCount > 0 {
-                                Button("Clear", systemImage: "trash") {
-                                    resetToken += 1
-                                    placementCount = 0
-                                    message = "Cleared — tap a surface to place another Mecca"
-                                }
-                                .font(.caption.weight(.semibold))
-                                .buttonStyle(.bordered)
-                            }
+                        ScrollView(.vertical) {
+                            toolbarScrollableContent
+                                .padding(.trailing, 4)
                         }
-
-                        Divider()
-
-                        MeccaPlacementControls(
-                            sizeMillimeters: $sizeMillimeters,
-                            xRotationDegrees: $xRotationDegrees,
-                            yRotationDegrees: $yRotationDegrees,
-                            tintColor: $tintColor,
-                            facePhoto: facePhoto,
-                            cameraAvailable: UIImagePickerController
-                                .isSourceTypeAvailable(.camera),
-                            onTakeFacePhoto: {
-                                pendingFacePhoto = nil
-                                isFaceCameraPresented = true
-                            },
-                            onPositionFacePhoto: {
-                                isFaceEditorPresented = true
-                            },
-                            onRemoveFacePhoto: {
-                                facePhoto = nil
-                                pendingFacePhoto = nil
-                                facePhotoRevision += 1
-                            }
+                        .scrollIndicators(.visible)
+                        .scrollBounceBehavior(.basedOnSize)
+                        .frame(
+                            maxHeight: min(
+                                UIScreen.main.bounds.height * 0.45,
+                                430
+                            )
                         )
 
-                        if placementCount > 0 {
-                            Text("Controls are editing the most recently placed Mecca.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-
+                        if placementCount > 0 && !alreadyPlacedToday {
                             Divider()
-
-                            saveSection
-                        } else if alreadyPlacedToday {
-                            Divider()
-                            dailyLimitNote
+                            reviewAndSaveButton
                         }
                     }
                 }
@@ -210,6 +182,10 @@ struct PlacementView: View {
             if didSave {
                 savedOverlay
             }
+
+            if isScanReviewPresented && !didSave {
+                scanReviewOverlay
+            }
         }
         .preferredColorScheme(.dark)
         .task { await MeccaEntityFactory.preload() }
@@ -218,11 +194,11 @@ struct PlacementView: View {
             await checkDailyLimit()
         }
         .task {
-            // Poll ARKit's world-mapping status so we can tell the user when the
-            // captured area is rich enough for precise relocalization.
+            // Sample the viewing direction slowly enough that turning the phone
+            // through every direction is a real scan rather than a quick spin.
             while !Task.isCancelled {
-                mappingQuality = arSession.currentMappingStatus()
-                try? await Task.sleep(nanoseconds: 600_000_000)
+                environmentScan = arSession.environmentScanSnapshot()
+                try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
         .sheet(
@@ -261,6 +237,68 @@ struct PlacementView: View {
         }
     }
 
+    private var toolbarScrollableContent: some View {
+        VStack(spacing: 12) {
+            Text("Point the reticle at a floor, table, or wall. When it turns green, tap Place Mecca.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack {
+                Label("\(placementCount) placed", systemImage: "mappin.and.ellipse")
+                    .font(.caption.weight(.bold))
+
+                Spacer()
+
+                if placementCount > 0 {
+                    Button("Clear", systemImage: "trash") {
+                        resetToken += 1
+                        placementCount = 0
+                        message = "Cleared — tap a surface to place another Mecca"
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            Divider()
+
+            MeccaPlacementControls(
+                sizeMillimeters: $sizeMillimeters,
+                xRotationDegrees: $xRotationDegrees,
+                yRotationDegrees: $yRotationDegrees,
+                tintColor: $tintColor,
+                facePhoto: facePhoto,
+                cameraAvailable: UIImagePickerController
+                    .isSourceTypeAvailable(.camera),
+                onTakeFacePhoto: {
+                    pendingFacePhoto = nil
+                    isFaceCameraPresented = true
+                },
+                onPositionFacePhoto: {
+                    isFaceEditorPresented = true
+                },
+                onRemoveFacePhoto: {
+                    facePhoto = nil
+                    pendingFacePhoto = nil
+                    facePhotoRevision += 1
+                }
+            )
+
+            if placementCount > 0 {
+                Text("Controls are editing the most recently placed Mecca.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+                saveSection
+            } else if alreadyPlacedToday {
+                Divider()
+                dailyLimitNote
+            }
+        }
+    }
+
     private var placeButton: some View {
         Button {
             placeToken += 1
@@ -294,14 +332,55 @@ struct PlacementView: View {
                     .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
 
                 Label(
-                    "Slowly look around the Mecca from a few angles first, then keep still and save. This records a precise AR map of the spot.",
-                    systemImage: "arkit"
+                    scanInstruction,
+                    systemImage: environmentScanIsReady
+                        ? "checkmark.circle.fill"
+                        : "figure.walk.motion"
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(environmentScanIsReady ? .mint : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+
+                VStack(spacing: 7) {
+                    HStack {
+                        Label("360° room captured", systemImage: "camera.metering.matrix")
+                            .font(.subheadline.weight(.bold))
+                        Spacer()
+                        Text("\(capturePercentage)%")
+                            .font(.title2.bold().monospacedDigit())
+                            .foregroundStyle(capturePercentage == 100 ? .mint : .yellow)
+                    }
+                    ProgressView(value: environmentScan.roomCaptureProgress)
+                        .tint(capturePercentage == 100 ? .mint : .yellow)
+                        .scaleEffect(y: 1.5)
+                }
+                .padding(10)
+                .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
 
                 mappingQualityLabel
+
+                ScanPassProgress(
+                    title: "1. Phone level",
+                    systemImage: "iphone",
+                    progress: environmentScan.levelProgress
+                )
+                ScanPassProgress(
+                    title: "2. Tilt toward floor",
+                    systemImage: "arrow.down.forward",
+                    progress: environmentScan.downwardProgress
+                )
+                ScanPassProgress(
+                    title: "3. Tilt toward ceiling",
+                    systemImage: "arrow.up.forward",
+                    progress: environmentScan.upwardProgress
+                )
+                ScanPassProgress(
+                    title: "Move at least 0.5 m",
+                    systemImage: "point.topleft.down.to.point.bottomright.curvepath",
+                    progress: environmentScan.parallaxProgress
+                )
 
                 if let saveError {
                     Label(saveError, systemImage: "exclamationmark.triangle.fill")
@@ -309,36 +388,73 @@ struct PlacementView: View {
                         .foregroundStyle(.orange)
                 }
 
-                Button(action: save) {
-                    HStack {
-                        if isSaving { ProgressView().tint(.black) }
-                        Text(isSaving ? saveStatus : "Save to map")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .padding(.vertical, 4)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.mint)
-                .disabled(isSaving || location.currentLocation == nil)
             }
         }
     }
 
+    private var reviewAndSaveButton: some View {
+        Button {
+            isScanReviewPresented = true
+        } label: {
+            HStack {
+                Image(systemName: capturePercentage == 100
+                    ? "checkmark.circle.fill"
+                    : "viewfinder.circle")
+                Text("Save Mecca at \(capturePercentage)%")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 5)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(capturePercentage == 100 ? .mint : .yellow)
+        .disabled(location.currentLocation == nil)
+        .accessibilityHint(
+            "Shows the predicted mapped space before final confirmation."
+        )
+    }
+
     @ViewBuilder
     private var mappingQualityLabel: some View {
-        let (text, symbol, tint): (String, String, Color) = switch mappingQuality {
+        let (text, symbol, tint): (String, String, Color) = switch environmentScan.mappingStatus {
+        case .mapped where environmentScanIsReady:
+            ("Room capture ready for review", "checkmark.circle.fill", .mint)
         case .mapped:
-            ("AR map ready — precise find enabled", "checkmark.circle.fill", .mint)
+            ("AR map is usable — save now or keep scanning for better coverage",
+             "checkmark.circle", .yellow)
         case .extending:
-            ("Good AR coverage — a bit more helps", "circle.lefthalf.filled", .yellow)
+            ("Partial AR map available — more scanning should improve hunter relocalization",
+             "circle.lefthalf.filled", .yellow)
         default:
-            ("Look around the Mecca to build the AR map", "arkit", .orange)
+            ("Very early capture — saving may fail until ARKit has enough room features",
+             "arkit", .orange)
         }
         Label(text, systemImage: symbol)
             .font(.caption.weight(.semibold))
             .foregroundStyle(tint)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var scanInstruction: String {
+        if environmentScan.isTurningTooFast {
+            return "Slow down. Rotate at roughly walking speed and pause briefly on corners, furniture, doors, and windows so ARKit can record sharp visual features."
+        }
+        if environmentScan.levelProgress < 1 {
+            return "Pass 1 of 3: hold the phone upright at chest height. Walk a small circle around the Mecca while turning slowly; keep furniture and wall details in frame."
+        }
+        if environmentScan.downwardProgress < 1 {
+            return "Pass 2 of 3: tilt the phone about 25° toward the floor and make another slow turn. Capture the floor-to-wall edges around the room."
+        }
+        if environmentScan.upwardProgress < 1 {
+            return "Pass 3 of 3: tilt about 25° upward and turn slowly again. Capture upper walls, doors, windows, and the ceiling edge."
+        }
+        if environmentScan.parallaxProgress < 1 {
+            return "Directional passes complete. Take a few slow side steps around the Mecca to add depth; avoid pointing at blank walls only."
+        }
+        if !environmentScanIsReady {
+            return "Coverage is complete, but ARKit needs more visual detail. Move slowly near textured furniture, corners, posters, or door frames."
+        }
+        return "Capture complete. Review the detected room outline and scan path before committing the Mecca."
     }
 
     @ViewBuilder
@@ -363,8 +479,8 @@ struct PlacementView: View {
                 Text("Mecca hidden!")
                     .font(.largeTitle.bold())
                 Text(didSaveWithMap
-                    ? "Saved with a precise AR map — hunters can lock onto its exact spot."
-                    : "Saved with GPS only. Look around next time to enable centimeter-accurate finding.")
+                    ? "Saved with \(savedCapturePercentage)% room coverage. More coverage generally makes exact relocalization easier for hunters."
+                    : "The required 360° AR map could not be saved.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -377,6 +493,86 @@ struct PlacementView: View {
                 .tint(.mint)
             }
             .padding(32)
+        }
+    }
+
+    private var scanReviewOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.82).ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Predicted mapped space")
+                            .font(.title2.bold())
+                        Text("\(capturePercentage)% captured · Mecca shown at its saved anchor")
+                            .font(.caption)
+                            .foregroundStyle(capturePercentage == 100 ? .mint : .yellow)
+                    }
+                    Spacer()
+                    Button {
+                        isScanReviewPresented = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Close scan review")
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 16)
+
+                ScrollView(.vertical) {
+                    VStack(spacing: 18) {
+                        RoomCaptureOutline(snapshot: environmentScan)
+                            .frame(height: 310)
+                            .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 18))
+
+                        Label(
+                            environmentScan.surfaceCount > 0
+                                ? "Solid mint shapes are detected horizontal surfaces and bright lines are walls. The orange marker is the Mecca's exact saved position."
+                                : "No plane outline was detected. The feature map may still relocalize, but scanning corners, furniture, and wall edges will improve reliability.",
+                            systemImage: "info.circle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if let saveError {
+                            Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.horizontal, 22)
+                }
+                .scrollIndicators(.visible)
+
+                Divider()
+
+                HStack(spacing: 12) {
+                    Button("Scan more", systemImage: "arrow.triangle.2.circlepath") {
+                        isScanReviewPresented = false
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(action: save) {
+                        HStack {
+                            if isSaving { ProgressView().tint(.black) }
+                            Text(isSaving
+                                ? saveStatus
+                                : "Confirm Save at \(capturePercentage)%")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.mint)
+                    .disabled(isSaving)
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 16)
+            }
         }
     }
 
@@ -405,6 +601,7 @@ struct PlacementView: View {
 
     private func save() {
         guard !isSaving, !alreadyPlacedToday, let owner = appState.currentUser else { return }
+        let chosenCapturePercentage = capturePercentage
 
         let trimmed = meccaName.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = trimmed.isEmpty ? "\(owner.username)'s Mecca" : trimmed
@@ -421,7 +618,11 @@ struct PlacementView: View {
             // Capture the AR world map first, while the user is still holding the
             // phone at the Mecca. This is what enables centimeter-accurate finding.
             saveStatus = "Capturing AR map — hold still…"
-            let worldMapData = await arSession.captureWorldMap()
+            guard let worldMapData = await arSession.captureWorldMap() else {
+                saveError = "The 360° AR map could not be captured. Keep scanning slowly and try again."
+                isSaving = false
+                return
+            }
 
             // Sample GPS for a few seconds too, as a coarse gate so hunters know
             // when they're close enough to start scanning.
@@ -439,27 +640,16 @@ struct PlacementView: View {
             )
             do {
                 saveStatus = "Saving…"
-                let mecca = try await appState.dependencies.meccas.createMecca(
+                _ = try await appState.dependencies.meccas.createMappedMecca(
                     ownerID: owner.id,
                     name: name,
                     coordinate: coordinate,
                     appearance: appearance,
-                    notBefore: notBefore
+                    notBefore: notBefore,
+                    worldMapData: worldMapData
                 )
-                if let worldMapData {
-                    saveStatus = "Uploading AR map…"
-                    do {
-                        try await appState.dependencies.meccas.uploadWorldMap(
-                            meccaID: mecca.id,
-                            compressedData: worldMapData
-                        )
-                        didSaveWithMap = true
-                    } catch {
-                        // The Mecca is saved with GPS; precise map upload is a
-                        // best-effort bonus, so don't fail the whole save.
-                        didSaveWithMap = false
-                    }
-                }
+                didSaveWithMap = true
+                savedCapturePercentage = chosenCapturePercentage
                 didSave = true
             } catch MeccaRepositoryError.dailyLimitReached {
                 alreadyPlacedToday = true
@@ -477,22 +667,319 @@ struct PlacementView: View {
 /// world map and read mapping quality without owning the `ARView` directly.
 @MainActor
 final class PlacementARSession {
-    weak var arView: ARView?
+    struct SurfaceOutline: Identifiable, Equatable {
+        enum Kind: Equatable {
+            case floorOrTable
+            case wall
+        }
 
-    func currentMappingStatus() -> ARFrame.WorldMappingStatus {
-        arView?.session.currentFrame?.worldMappingStatus ?? .notAvailable
+        let id: UUID
+        let kind: Kind
+        let points: [SIMD2<Float>]
+    }
+
+    struct EnvironmentScanSnapshot {
+        let levelProgress: Double
+        let downwardProgress: Double
+        let upwardProgress: Double
+        let parallaxProgress: Double
+        let mappingStatus: ARFrame.WorldMappingStatus
+        let featurePointCount: Int
+        let surfaces: [SurfaceOutline]
+        let cameraPath: [SIMD2<Float>]
+        let meccaPosition: SIMD2<Float>?
+        let maximumDisplacementMeters: Double
+        let isTurningTooFast: Bool
+
+        static let empty = EnvironmentScanSnapshot(
+            levelProgress: 0,
+            downwardProgress: 0,
+            upwardProgress: 0,
+            parallaxProgress: 0,
+            mappingStatus: .notAvailable,
+            featurePointCount: 0,
+            surfaces: [],
+            cameraPath: [],
+            meccaPosition: nil,
+            maximumDisplacementMeters: 0,
+            isTurningTooFast: false
+        )
+
+        var directionalProgress: Double {
+            min(levelProgress, downwardProgress, upwardProgress)
+        }
+
+        /// Overall 360° coverage across all 72 directional sectors. Movement
+        /// and ARKit mapping quality are reported separately because this is the
+        /// percentage the user explicitly chooses to save.
+        var roomCaptureProgress: Double {
+            (levelProgress + downwardProgress + upwardProgress) / 3
+        }
+
+        var surfaceCount: Int { surfaces.count }
+    }
+
+    private enum ScanBand: CaseIterable {
+        case level
+        case downward
+        case upward
+    }
+
+    /// Each pitch pass must cover twenty-four 15° sectors. Frames are sampled
+    /// directly from AR rather than by the SwiftUI timer, reducing UI latency.
+    private static let environmentSectorCount = 24
+    private static let requiredMovementMeters: Float = 0.5
+    private static let minimumSampleInterval = 0.12
+    private static let maximumAngularSpeedRadiansPerSecond = 0.9
+    private static let stableObservationsPerSector = 3
+    private static let minimumFeaturePointsPerObservation = 30
+
+    weak var arView: ARView?
+    private var isScanningEnvironment = false
+    private var observedSectors: [ScanBand: Set<Int>] = [:]
+    private var sectorEvidence: [ScanBand: [Int: Int]] = [:]
+    private var scanOrigin: SIMD3<Float>?
+    private var meccaWorldTransform: simd_float4x4?
+    private var meccaWorldPosition: SIMD2<Float>?
+    private var maximumDisplacement: Float = 0
+    private var cameraPath: [SIMD2<Float>] = []
+    private var maximumFeaturePointCount = 0
+    private var previousYaw: Double?
+    private var previousFrameTimestamp: TimeInterval?
+    private var lastSectorSampleTimestamp: TimeInterval?
+    private var lastFastTurnTimestamp: TimeInterval?
+
+    func beginEnvironmentScan(meccaTransform: simd_float4x4) {
+        observedSectors = Dictionary(
+            uniqueKeysWithValues: ScanBand.allCases.map { ($0, Set<Int>()) }
+        )
+        sectorEvidence = Dictionary(
+            uniqueKeysWithValues: ScanBand.allCases.map { ($0, [:]) }
+        )
+        let camera = arView?.session.currentFrame?.camera.transform.columns.3
+        scanOrigin = camera.map { SIMD3<Float>($0.x, $0.y, $0.z) }
+        let mecca = meccaTransform.columns.3
+        meccaWorldTransform = meccaTransform
+        meccaWorldPosition = [mecca.x, mecca.z]
+        maximumDisplacement = 0
+        cameraPath.removeAll()
+        maximumFeaturePointCount = 0
+        previousYaw = nil
+        previousFrameTimestamp = nil
+        lastSectorSampleTimestamp = nil
+        lastFastTurnTimestamp = nil
+        isScanningEnvironment = true
+        arView?.debugOptions = [.showFeaturePoints, .showSceneUnderstanding]
+    }
+
+    func resetEnvironmentScan() {
+        observedSectors.removeAll()
+        sectorEvidence.removeAll()
+        scanOrigin = nil
+        meccaWorldTransform = nil
+        meccaWorldPosition = nil
+        maximumDisplacement = 0
+        cameraPath.removeAll()
+        maximumFeaturePointCount = 0
+        previousYaw = nil
+        previousFrameTimestamp = nil
+        lastSectorSampleTimestamp = nil
+        lastFastTurnTimestamp = nil
+        isScanningEnvironment = false
+        arView?.debugOptions = []
+    }
+
+    /// Called from RealityKit's per-frame update. Coverage is accepted only
+    /// during normal tracking and a controlled turn; a blurry fast spin does
+    /// not fill sectors.
+    func recordEnvironmentScanFrame() {
+        guard
+            isScanningEnvironment,
+            let frame = arView?.session.currentFrame,
+            case .normal = frame.camera.trackingState
+        else { return }
+
+        let transform = frame.camera.transform
+        let visibleFeatureCount = frame.rawFeaturePoints?.points.count ?? 0
+        maximumFeaturePointCount = max(
+            maximumFeaturePointCount,
+            visibleFeatureCount
+        )
+        let position4 = transform.columns.3
+        let position = SIMD3<Float>(position4.x, position4.y, position4.z)
+        recordMovement(position)
+
+        let forward3 = SIMD3<Float>(
+            -transform.columns.2.x,
+            -transform.columns.2.y,
+            -transform.columns.2.z
+        )
+        let horizontalForward = SIMD2<Float>(forward3.x, forward3.z)
+        guard simd_length(horizontalForward) > 0.25 else { return }
+
+        var yaw = atan2(Double(horizontalForward.x), Double(horizontalForward.y))
+        if yaw < 0 { yaw += 2 * .pi }
+        let timestamp = frame.timestamp
+
+        defer {
+            previousYaw = yaw
+            previousFrameTimestamp = timestamp
+        }
+
+        guard let previousYaw, let previousFrameTimestamp else { return }
+        let elapsed = timestamp - previousFrameTimestamp
+        guard elapsed > 0 else { return }
+        var yawDelta = abs(yaw - previousYaw)
+        yawDelta = min(yawDelta, 2 * .pi - yawDelta)
+        let angularSpeed = yawDelta / elapsed
+        if angularSpeed > Self.maximumAngularSpeedRadiansPerSecond {
+            lastFastTurnTimestamp = timestamp
+            return
+        }
+        guard timestamp - (lastSectorSampleTimestamp ?? 0) >= Self.minimumSampleInterval else {
+            return
+        }
+
+        let band: ScanBand?
+        if forward3.y < -0.28 {
+            band = .downward
+        } else if forward3.y > 0.28 {
+            band = .upward
+        } else if abs(forward3.y) < 0.20 {
+            band = .level
+        } else {
+            band = nil
+        }
+        guard let band else { return }
+        guard visibleFeatureCount >= Self.minimumFeaturePointsPerObservation else { return }
+
+        let sectorWidth = 2 * Double.pi / Double(Self.environmentSectorCount)
+        let sector = min(Int(yaw / sectorWidth), Self.environmentSectorCount - 1)
+        let evidence = (sectorEvidence[band]?[sector] ?? 0) + 1
+        sectorEvidence[band, default: [:]][sector] = evidence
+        if evidence >= Self.stableObservationsPerSector {
+            observedSectors[band, default: []].insert(sector)
+        }
+        lastSectorSampleTimestamp = timestamp
+    }
+
+    func environmentScanSnapshot() -> EnvironmentScanSnapshot {
+        guard let frame = arView?.session.currentFrame else {
+            return .empty
+        }
+        return EnvironmentScanSnapshot(
+            levelProgress: progress(for: .level),
+            downwardProgress: progress(for: .downward),
+            upwardProgress: progress(for: .upward),
+            parallaxProgress: min(
+                Double(maximumDisplacement / Self.requiredMovementMeters),
+                1
+            ),
+            mappingStatus: frame.worldMappingStatus,
+            featurePointCount: maximumFeaturePointCount,
+            surfaces: surfaceOutlines(from: frame),
+            cameraPath: cameraPath,
+            meccaPosition: meccaWorldPosition,
+            maximumDisplacementMeters: Double(maximumDisplacement),
+            isTurningTooFast: lastFastTurnTimestamp.map {
+                frame.timestamp - $0 < 1
+            } ?? false
+        )
+    }
+
+    private func progress(for band: ScanBand) -> Double {
+        Double(observedSectors[band]?.count ?? 0)
+            / Double(Self.environmentSectorCount)
+    }
+
+    private func recordMovement(_ position: SIMD3<Float>) {
+        if scanOrigin == nil { scanOrigin = position }
+        if let scanOrigin {
+            let horizontalDelta = SIMD2<Float>(
+                position.x - scanOrigin.x,
+                position.z - scanOrigin.z
+            )
+            maximumDisplacement = max(maximumDisplacement, simd_length(horizontalDelta))
+        }
+
+        let point = SIMD2<Float>(position.x, position.z)
+        if let last = cameraPath.last, simd_distance(last, point) < 0.06 { return }
+        cameraPath.append(point)
+        if cameraPath.count > 240 {
+            cameraPath.removeFirst(cameraPath.count - 240)
+        }
+    }
+
+    private func surfaceOutlines(from frame: ARFrame) -> [SurfaceOutline] {
+        frame.anchors.compactMap { anchor in
+            guard let plane = anchor as? ARPlaneAnchor else { return nil }
+            let center = plane.center
+            let halfWidth = plane.extent.x / 2
+
+            switch plane.alignment {
+            case .horizontal:
+                let halfDepth = plane.extent.z / 2
+                let corners: [SIMD3<Float>] = [
+                    [center.x - halfWidth, center.y, center.z - halfDepth],
+                    [center.x + halfWidth, center.y, center.z - halfDepth],
+                    [center.x + halfWidth, center.y, center.z + halfDepth],
+                    [center.x - halfWidth, center.y, center.z + halfDepth]
+                ]
+                return SurfaceOutline(
+                    id: plane.identifier,
+                    kind: .floorOrTable,
+                    points: corners.map { worldPoint($0, using: plane.transform) }
+                )
+            case .vertical:
+                let ends: [SIMD3<Float>] = [
+                    [center.x - halfWidth, center.y, center.z],
+                    [center.x + halfWidth, center.y, center.z]
+                ]
+                return SurfaceOutline(
+                    id: plane.identifier,
+                    kind: .wall,
+                    points: ends.map { worldPoint($0, using: plane.transform) }
+                )
+            @unknown default:
+                return nil
+            }
+        }
+    }
+
+    private func worldPoint(
+        _ point: SIMD3<Float>,
+        using transform: simd_float4x4
+    ) -> SIMD2<Float> {
+        let world = transform * SIMD4<Float>(point.x, point.y, point.z, 1)
+        return [world.x, world.z]
     }
 
     /// Asks ARKit for the current world map and returns it archived + compressed,
     /// or nil if a usable map isn't available yet.
     func captureWorldMap() async -> Data? {
         guard let session = arView?.session else { return nil }
+        let exactMeccaTransform = meccaWorldTransform
         return await withCheckedContinuation { continuation in
             session.getCurrentWorldMap { map, _ in
                 guard let map else {
                     continuation.resume(returning: nil)
                     return
                 }
+                // Be explicit even if ARKit already included the live session
+                // anchor. This guarantees the archived map has exactly one
+                // named Mecca anchor at the placement transform.
+                var anchors = map.anchors.filter {
+                    $0.name != PreciseMeccaARController.anchorName
+                }
+                if let exactMeccaTransform {
+                    anchors.append(
+                        ARAnchor(
+                            name: PreciseMeccaARController.anchorName,
+                            transform: exactMeccaTransform
+                        )
+                    )
+                }
+                map.anchors = anchors
                 continuation.resume(returning: try? ARWorldMapArchiver.encode(map))
             }
         }
@@ -719,6 +1206,107 @@ private struct AxisRotationControl: View {
     }
 }
 
+private struct ScanPassProgress: View {
+    let title: String
+    let systemImage: String
+    let progress: Double
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: progress >= 1 ? "checkmark.circle.fill" : systemImage)
+                .foregroundStyle(progress >= 1 ? .mint : .yellow)
+                .frame(width: 22)
+            ProgressView(value: progress)
+                .tint(progress >= 1 ? .mint : .yellow)
+            Text("\(Int((progress * 100).rounded()))%")
+                .font(.caption2.monospacedDigit())
+                .frame(width: 34, alignment: .trailing)
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .frame(width: 112, alignment: .leading)
+        }
+    }
+}
+
+private struct RoomCaptureOutline: View {
+    let snapshot: PlacementARSession.EnvironmentScanSnapshot
+
+    private var allPoints: [SIMD2<Float>] {
+        snapshot.surfaces.flatMap(\.points)
+            + [snapshot.meccaPosition].compactMap { $0 }
+    }
+
+    var body: some View {
+        ZStack {
+            Canvas { context, size in
+                let points = allPoints
+                let rawMinimumX = points.map(\.x).min() ?? -0.5
+                let rawMaximumX = points.map(\.x).max() ?? 0.5
+                let rawMinimumZ = points.map(\.y).min() ?? -0.5
+                let rawMaximumZ = points.map(\.y).max() ?? 0.5
+                let spanX = max(rawMaximumX - rawMinimumX, 1)
+                let spanZ = max(rawMaximumZ - rawMinimumZ, 1)
+                let minimumX = (rawMinimumX + rawMaximumX - spanX) / 2
+                let minimumZ = (rawMinimumZ + rawMaximumZ - spanZ) / 2
+                let scale = min(
+                    (size.width - 36) / CGFloat(spanX),
+                    (size.height - 36) / CGFloat(spanZ)
+                )
+                let contentWidth = CGFloat(spanX) * scale
+                let contentHeight = CGFloat(spanZ) * scale
+                let xInset = (size.width - contentWidth) / 2
+                let yInset = (size.height - contentHeight) / 2
+                let project: (SIMD2<Float>) -> CGPoint = { point in
+                    CGPoint(
+                        x: xInset + CGFloat(point.x - minimumX) * scale,
+                        y: size.height - yInset - CGFloat(point.y - minimumZ) * scale
+                    )
+                }
+
+                for surface in snapshot.surfaces {
+                    guard let first = surface.points.first else { continue }
+                    var path = Path()
+                    path.move(to: project(first))
+                    for point in surface.points.dropFirst() {
+                        path.addLine(to: project(point))
+                    }
+                    switch surface.kind {
+                    case .floorOrTable:
+                        path.closeSubpath()
+                        context.fill(path, with: .color(.mint.opacity(0.16)))
+                        context.stroke(path, with: .color(.mint.opacity(0.75)), lineWidth: 1.5)
+                    case .wall:
+                        context.stroke(path, with: .color(.mint), lineWidth: 3)
+                    }
+                }
+
+                if let mecca = snapshot.meccaPosition {
+                    let center = project(mecca)
+                    let marker = Path(ellipseIn: CGRect(
+                        x: center.x - 7,
+                        y: center.y - 7,
+                        width: 14,
+                        height: 14
+                    ))
+                    context.fill(marker, with: .color(.orange))
+                    context.stroke(marker, with: .color(.white), lineWidth: 2)
+                }
+            }
+
+            if snapshot.surfaces.isEmpty {
+                Text("Keep scanning room edges to build an outline")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .multilineTextAlignment(.center)
+                    .padding(50)
+            }
+
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
 private struct Crosshair: View {
     var active: Bool = false
 
@@ -898,6 +1486,7 @@ private struct PlacementARView: UIViewRepresentable {
 
         private func refreshReticle() {
             guard let arView, let reticle else { return }
+            parent.session.recordEnvironmentScanFrame()
 
             if let hit = bestSurfaceHit() {
                 latestHit = hit
@@ -1010,6 +1599,7 @@ private struct PlacementARView: UIViewRepresentable {
             )
             arView.session.add(anchor: worldAnchor)
             persistedAnchor = worldAnchor
+            parent.session.beginEnvironmentScan(meccaTransform: anchorTransform)
 
             Task { @MainActor [weak self] in
                 guard let self, let arView = self.arView else { return }
@@ -1032,7 +1622,7 @@ private struct PlacementARView: UIViewRepresentable {
                 self.lastAppliedConfiguration = placementConfiguration
 
                 self.parent.placementCount = 1
-                self.parent.message = "Mecca placed — adjust it below or save it"
+                self.parent.message = "Mecca placed — slowly scan a full 360° around it"
             }
         }
 
@@ -1044,6 +1634,7 @@ private struct PlacementARView: UIViewRepresentable {
                 arView?.session.remove(anchor: existing)
                 persistedAnchor = nil
             }
+            parent.session.resetEnvironmentScan()
             lastResetToken = resetToken
             lastAppliedConfiguration = nil
         }

@@ -65,6 +65,15 @@ private struct UnavailableRepository: AuthRepository, MeccaRepository {
         notBefore: Date
     ) async throws -> Mecca { throw failure }
 
+    func createMappedMecca(
+        ownerID: UUID,
+        name: String,
+        coordinate: GeoCoordinate,
+        appearance: MeccaAppearance,
+        notBefore: Date,
+        worldMapData: Data
+    ) async throws -> Mecca { throw failure }
+
     func lastPlacement(ownerID: UUID) async throws -> Date? { throw failure }
 
     func claim(

@@ -1,6 +1,13 @@
+import ARKit
 import CoreLocation
 import MapKit
 import SwiftUI
+
+private struct HuntRoomSession: Identifiable {
+    let id = UUID()
+    let targets: [Mecca]
+    let primaryWorldMap: ARWorldMap?
+}
 
 /// The app's main page: a live map of every hidden Mecca. Nearby Meccas can be
 /// hunted; groups in the same room collapse into a single point.
@@ -11,7 +18,9 @@ struct HuntMapView: View {
     @State private var model: HuntViewModel?
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var selectedCluster: MeccaCluster?
-    @State private var huntTarget: Mecca?
+    @State private var huntRoom: HuntRoomSession?
+    @State private var preloadedWorldMaps: [UUID: ARWorldMap] = [:]
+    @State private var attemptedWorldMapLoads: Set<UUID> = []
     @State private var showLeaderboard = false
 
     var body: some View {
@@ -40,6 +49,9 @@ struct HuntMapView: View {
             location.start()
             await reload()
         }
+        .task(id: huntableWorldMapIDs) {
+            await preloadNearbyWorldMaps()
+        }
         .sheet(item: $selectedCluster) { cluster in
             ClusterDetailSheet(
                 cluster: cluster,
@@ -49,8 +61,11 @@ struct HuntMapView: View {
             .presentationDetents([.medium, .large])
             .preferredColorScheme(.dark)
         }
-        .fullScreenCover(item: $huntTarget) { target in
-            HuntARView(target: target) {
+        .fullScreenCover(item: $huntRoom) { room in
+            RoomHuntARView(
+                targets: room.targets,
+                preloadedPrimaryWorldMap: room.primaryWorldMap
+            ) {
                 await reload()
             }
         }
@@ -149,7 +164,17 @@ struct HuntMapView: View {
 
         VStack(spacing: 10) {
             ForEach(huntable) { candidate in
-                HuntableRow(candidate: candidate) { huntTarget = candidate.mecca }
+                HuntableRow(candidate: candidate) {
+                    // Launch one room session so every nearby, same-floor
+                    // Mecca is instantiated at once instead of one at a time.
+                    let others = huntable
+                        .map(\.mecca)
+                        .filter { $0.id != candidate.mecca.id }
+                    huntRoom = HuntRoomSession(
+                        targets: [candidate.mecca] + others,
+                        primaryWorldMap: preloadedWorldMaps[candidate.mecca.id]
+                    )
+                }
             }
 
             ForEach(offFloor) { candidate in
@@ -207,6 +232,45 @@ struct HuntMapView: View {
     private func reload() async {
         guard let model, let userID = appState.currentUser?.id else { return }
         await model.load(hunterID: userID)
+    }
+
+    private var currentHuntableCandidates: [NearbyMecca] {
+        guard
+            let model,
+            let userID = appState.currentUser?.id
+        else { return [] }
+        return model.huntable(
+            from: location.currentLocation,
+            currentUserID: userID
+        )
+    }
+
+    private var huntableWorldMapIDs: [UUID] {
+        currentHuntableCandidates
+            .map(\.mecca)
+            .filter(\.hasWorldMap)
+            .map(\.id)
+    }
+
+    /// Download maps while the hunter is merely in range, before they open the
+    /// camera. ARKit still needs live visual recognition, but network transfer
+    /// and decompression are no longer part of the apparent-generation delay.
+    private func preloadNearbyWorldMaps() async {
+        for mecca in currentHuntableCandidates.map(\.mecca)
+        where mecca.hasWorldMap
+            && preloadedWorldMaps[mecca.id] == nil
+            && !attemptedWorldMapLoads.contains(mecca.id) {
+            attemptedWorldMapLoads.insert(mecca.id)
+            do {
+                guard let data = try await appState.dependencies.meccas.worldMap(for: mecca.id) else {
+                    continue
+                }
+                preloadedWorldMaps[mecca.id] = try ARWorldMapArchiver.decode(data)
+            } catch {
+                // Room hunt retains the stable coordinate fallback for legacy
+                // records whose map cannot be downloaded or decoded.
+            }
+        }
     }
 }
 

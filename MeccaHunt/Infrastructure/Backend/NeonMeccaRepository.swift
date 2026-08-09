@@ -107,6 +107,82 @@ struct NeonMeccaRepository: MeccaRepository {
         return mecca
     }
 
+    func createMappedMecca(
+        ownerID: UUID,
+        name: String,
+        coordinate: GeoCoordinate,
+        appearance: MeccaAppearance,
+        notBefore: Date,
+        worldMapData: Data
+    ) async throws -> Mecca {
+        let rows = try await client.execute(
+            """
+            with inserted as (
+                insert into meccas (
+                    owner_id, name, latitude, longitude, altitude,
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue
+                )
+                select
+                    $1::uuid, $2, $3::double precision, $4::double precision, $5::double precision,
+                    $7::double precision, $8::double precision, $9::double precision,
+                    $10::double precision, $11::double precision, $12::double precision
+                where not exists (
+                    select 1 from meccas
+                    where owner_id = $1::uuid and created_at >= $6::timestamptz
+                )
+                returning id, owner_id, name, latitude, longitude, altitude,
+                    size_mm, x_rotation, y_rotation, tint_red, tint_green, tint_blue, created_at
+            ),
+            mapped as (
+                insert into mecca_world_maps (mecca_id, data)
+                select id, $13 from inserted
+                returning mecca_id
+            )
+            select
+                i.id as id,
+                i.owner_id as owner_id,
+                u.username as owner_username,
+                i.name as name,
+                i.latitude as latitude,
+                i.longitude as longitude,
+                i.altitude as altitude,
+                i.size_mm as size_mm,
+                i.x_rotation as x_rotation,
+                i.y_rotation as y_rotation,
+                i.tint_red as tint_red,
+                i.tint_green as tint_green,
+                i.tint_blue as tint_blue,
+                extract(epoch from i.created_at) as created_at_epoch,
+                0 as claim_count,
+                0 as claimed_by_me,
+                1 as has_world_map
+            from inserted i
+            join mapped w on w.mecca_id = i.id
+            join users u on u.id = i.owner_id;
+            """,
+            [
+                .uuid(ownerID),
+                .text(name),
+                .double(coordinate.latitude),
+                .double(coordinate.longitude),
+                .optionalDouble(coordinate.altitude),
+                .timestamp(notBefore),
+                .double(appearance.sizeMillimeters),
+                .double(appearance.xRotationDegrees),
+                .double(appearance.yRotationDegrees),
+                .double(appearance.red),
+                .double(appearance.green),
+                .double(appearance.blue),
+                .text(worldMapData.base64EncodedString())
+            ]
+        )
+
+        guard let mecca = rows.first.flatMap(Self.mecca(from:)) else {
+            throw MeccaRepositoryError.dailyLimitReached
+        }
+        return mecca
+    }
+
     func lastPlacement(ownerID: UUID) async throws -> Date? {
         let rows = try await client.execute(
             """

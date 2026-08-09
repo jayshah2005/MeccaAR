@@ -59,6 +59,20 @@ struct HuntARView: View {
         )
     }
 
+    private var approximatePrecisePlacement: PreciseMeccaARController.FallbackPlacement? {
+        guard let placement else { return nil }
+        let heading = location.heading.flatMap { reading -> Double? in
+            if reading.trueHeading >= 0 { return reading.trueHeading }
+            if reading.magneticHeading >= 0 { return reading.magneticHeading }
+            return nil
+        }
+        return PreciseMeccaARController.FallbackPlacement(
+            bearingDegrees: placement.bearingDegrees,
+            distanceMeters: placement.distanceMeters,
+            headingDegrees: heading
+        )
+    }
+
     var body: some View {
         ZStack {
             arLayer
@@ -92,6 +106,7 @@ struct HuntARView: View {
             HuntPreciseARContainer(
                 worldMap: map,
                 appearance: target.appearance,
+                fallbackPlacement: approximatePrecisePlacement,
                 didTapMecca: $didTapMecca,
                 state: $preciseState
             )
@@ -178,9 +193,14 @@ struct HuntARView: View {
             return "Loading precise AR map…"
         }
         if isPreciseMode {
-            return preciseState == .located
-                ? "Locked on — tap the Mecca!"
-                : "Scan the area to lock on"
+            switch preciseState {
+            case .located:
+                return "Locked on — tap the Mecca!"
+            case .approximating:
+                return "Mecca visible — position refining"
+            case .initializing, .relocalizing:
+                return "Showing the nearby Mecca…"
+            }
         }
         guard let distance = liveDistance else {
             return "Finding your location…"
@@ -193,9 +213,14 @@ struct HuntARView: View {
 
     private var subHintText: String {
         if isPreciseMode {
-            return preciseState == .located
-                ? "This Mecca is pinned to its exact real-world spot."
-                : "Slowly pan your phone across the area where it was hidden until it locks on (centimeter-accurate)."
+            switch preciseState {
+            case .located:
+                return "This Mecca is pinned to its exact real-world spot."
+            case .approximating:
+                return "You can see and hunt it now. Its position will become centimeter-accurate automatically if ARKit recognizes the saved area."
+            case .initializing, .relocalizing:
+                return "The nearby Mecca will appear immediately when camera tracking starts."
+            }
         }
         guard let distance = liveDistance else {
             return "Move outside for a better GPS fix."
@@ -353,6 +378,7 @@ private struct HuntARContainer: UIViewRepresentable {
 private struct HuntPreciseARContainer: UIViewRepresentable {
     let worldMap: ARWorldMap
     let appearance: MeccaAppearance
+    let fallbackPlacement: PreciseMeccaARController.FallbackPlacement?
     @Binding var didTapMecca: Bool
     @Binding var state: PreciseMeccaARController.State
 
@@ -375,6 +401,7 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
         context.coordinator.controller.start(
             worldMap: worldMap,
             appearance: appearance,
+            fallbackPlacement: fallbackPlacement,
             in: arView
         )
         return arView
@@ -382,6 +409,7 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
 
     func updateUIView(_ arView: ARView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.controller.updateFallback(fallbackPlacement)
     }
 
     static func dismantleUIView(_ arView: ARView, coordinator: Coordinator) {
@@ -409,4 +437,3 @@ private struct HuntPreciseARContainer: UIViewRepresentable {
         }
     }
 }
-

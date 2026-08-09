@@ -17,6 +17,18 @@ protocol MeccaRepository: Sendable {
         notBefore: Date
     ) async throws -> Mecca
 
+    /// Persist the Mecca and its required AR world map atomically. If the map
+    /// cannot be stored, the Mecca must not become visible to hunters as a
+    /// GPS-only placement.
+    func createMappedMecca(
+        ownerID: UUID,
+        name: String,
+        coordinate: GeoCoordinate,
+        appearance: MeccaAppearance,
+        notBefore: Date,
+        worldMapData: Data
+    ) async throws -> Mecca
+
     /// The most recent time this owner hid a Mecca, or nil if they never have.
     func lastPlacement(ownerID: UUID) async throws -> Date?
 
