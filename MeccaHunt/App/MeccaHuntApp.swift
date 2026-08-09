@@ -13,7 +13,7 @@ struct MeccaHuntApp: App {
                 case .place:
                     PlacementView()
                 case .hunt:
-                    HomeView()
+                    HuntView()
                 }
             }
             .environment(appState)

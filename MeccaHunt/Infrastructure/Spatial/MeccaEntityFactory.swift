@@ -1,8 +1,87 @@
+import Combine
 import RealityKit
 import UIKit
 
+@MainActor
 enum MeccaEntityFactory {
-    static func make() -> Entity {
+    /// The controls treat a scale of 1 as a 36 cm-tall character.
+    private static let referenceHeight: Float = 0.36
+    private static var cachedTemplate: Entity?
+
+    static func make() async -> Entity {
+        if let cachedTemplate {
+            return cachedTemplate.clone(recursive: true)
+        }
+
+        let template: Entity
+        do {
+            let imported = try await loadImportedModel()
+            template = prepare(imported)
+        } catch {
+            template = makeProceduralFallback()
+        }
+
+        cachedTemplate = template
+        return template.clone(recursive: true)
+    }
+
+    private static func loadImportedModel() async throws -> Entity {
+        for try await entity in Entity.loadAsync(
+            named: "Mecca",
+            in: .main
+        ).values {
+            return entity
+        }
+
+        throw ModelLoadError.noEntity
+    }
+
+    private static func prepare(_ imported: Entity) -> Entity {
+        let root = Entity()
+        root.name = "mecca"
+        root.addChild(imported)
+
+        // Sketchfab exports retain their authoring units and origin. Normalize
+        // the visible bounds so placement code can use predictable real-world
+        // sizes, and move the lowest point to the anchor plane.
+        // This asset declares Y-up, but its longest/standing axis is +Z.
+        imported.orientation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+        let bounds = imported.visualBounds(relativeTo: root)
+        let height = bounds.extents.y
+        if height > 0.0001 {
+            let normalizationScale = referenceHeight / height
+            imported.scale = SIMD3<Float>(repeating: normalizationScale)
+
+            let lowestPoint = bounds.center.y - (height / 2)
+            imported.position = [
+                -bounds.center.x * normalizationScale,
+                -lowestPoint * normalizationScale,
+                -bounds.center.z * normalizationScale
+            ]
+
+            // A simple box is much cheaper than generating a convex collision
+            // shape from this relatively dense prototype mesh.
+            let collisionEntity = Entity()
+            collisionEntity.name = "mecca-collision"
+            collisionEntity.position = [0, referenceHeight / 2, 0]
+            collisionEntity.components.set(
+                CollisionComponent(shapes: [
+                    .generateBox(
+                        size: [
+                            max(bounds.extents.x * normalizationScale, 0.01),
+                            referenceHeight,
+                            max(bounds.extents.z * normalizationScale, 0.01)
+                        ]
+                    )
+                ])
+            )
+            root.addChild(collisionEntity)
+        }
+
+        return root
+    }
+
+    private static func makeProceduralFallback() -> Entity {
         let root = Entity()
         root.name = "mecca"
 
@@ -101,5 +180,9 @@ enum MeccaEntityFactory {
         )
         box.position = position
         root.addChild(box)
+    }
+
+    private enum ModelLoadError: Error {
+        case noEntity
     }
 }

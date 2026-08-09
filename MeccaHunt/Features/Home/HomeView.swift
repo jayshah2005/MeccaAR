@@ -42,9 +42,10 @@ struct HomeView: View {
                         title: "Hunt nearby",
                         detail: "Map discovery and hunting come next",
                         symbol: "scope",
-                        badge: "PLANNED",
-                        action: nil
-                    )
+                        badge: "PLANNED"
+                    ) {
+                        appState.route = .hunt
+                    }
 
                     Label("Local AR placement enabled", systemImage: "checkmark.circle.fill")
                         .font(.footnote.weight(.semibold))

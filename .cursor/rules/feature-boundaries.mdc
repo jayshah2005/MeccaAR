@@ -1,0 +1,20 @@
+---
+description: Keep Home, Mecca placement, and Mecca hunting in separate features
+globs: MeccaHunt/**/*.swift
+alwaysApply: true
+---
+
+# Mandatory feature boundaries
+
+- `MeccaHunt/Features/Home/` contains only the main menu and home-screen UI.
+- `MeccaHunt/Features/Placement/` contains all AR placement and Mecca editing code.
+- `MeccaHunt/Features/Hunt/` contains all hunt discovery, targeting, claiming, and scoring code.
+- Never put placement or hunt implementation in `HomeView`.
+- Never put home or hunt implementation in `PlacementView`.
+- Never put home or placement implementation in `HuntView`.
+- Features must not instantiate another feature's private views, models, or coordinators.
+- `MeccaHunt/App/` is limited to app launch, routing, and dependency composition.
+- Route between feature entry views through `AppState.Route` and `MeccaHuntApp`.
+- Put cross-feature business contracts in `Domain/` and shared platform services in `Infrastructure/`.
+- Add shared UI only when at least two features use it; do not hide feature-specific code in shared folders.
+- Before finishing, inspect every changed Swift file for boundary violations and parse or build the project.
